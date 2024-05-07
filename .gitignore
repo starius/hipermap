@@ -30,3 +30,9 @@
 *.exe
 *.out
 *.app
+
+ipset
+build
+drop.txt
+
+*.swp
