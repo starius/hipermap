@@ -1,5 +1,5 @@
-sudo apt-get install libhyperscan-dev libcork-dev
-sudo apt-get install build-essential cmake cmake-curses-gui pkg-config check
+sudo apt-get install -y libhyperscan-dev libcork-dev
+sudo apt-get install -y build-essential cmake cmake-curses-gui pkg-config check
 
 curl https://www.spamhaus.org/drop/drop.txt > drop.txt
 
