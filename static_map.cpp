@@ -62,11 +62,9 @@ static uint32_t hm_end_ip_of_zone(uint32_t ip, uint8_t cidr_prefix) {
   return (((ip) >> zero_bits) + 1) << zero_bits;
 }
 
+// Round up to even number.
 static size_t hm_aligned_size(size_t list_size) {
-  size_t aligned_size = list_size;
-  aligned_size |= 2;
-  aligned_size &= (~1);
-  return aligned_size;
+  return list_size + (list_size & 1);
 }
 
 hm_error_t hm_compile(char *db_place, size_t db_place_size,
