@@ -36,6 +36,9 @@ typedef int hm_error_t;
 // HM_ERROR_BAD_VALUE is returned if the value is invalid.
 #define HM_ERROR_BAD_VALUE (4)
 
+// HM_ERROR_BAD_RANGE is returned if IP range has non-zero bits after prefix.
+#define HM_ERROR_BAD_RANGE (5)
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

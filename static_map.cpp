@@ -92,6 +92,10 @@ hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
       return HM_ERROR_BAD_VALUE;
     }
 
+    if (ips[i] & ((1 << (32 - cidr_prefixes[i])) - 1)) {
+      return HM_ERROR_BAD_RANGE;
+    }
+
     hm_input_elem elem{
         .ip = ips[i],
         .cidr_prefix = cidr_prefixes[i],
