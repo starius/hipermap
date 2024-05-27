@@ -195,7 +195,7 @@ int main(int argc, char *argv[]) {
   hm_database_t *hm_db;
   hm_error_t hm_err = hm_compile(hm_db_place, hm_db_place_len, &hm_db, ips,
                                  cidr_prefixes, values, len);
-  if (hm_err != hm_success) {
+  if (hm_err != HM_SUCCESS) {
     printf("hm_compile failed: %d.\n", hm_err);
     return 1;
   }
@@ -206,8 +206,8 @@ int main(int argc, char *argv[]) {
   // Check edge cases.
   uint64_t v1 = hm_find(hm_db, 0x00000000);
   uint64_t v2 = hm_find(hm_db, 0xFFFFFFFF);
-  assert(v1 == hm_no_value);
-  assert(v2 == hm_no_value);
+  assert(v1 == HM_NO_VALUE);
+  assert(v2 == HM_NO_VALUE);
 
   uint32_t ip = 1;
   const int SAMPLE_SIZE = 100000000;
@@ -238,7 +238,7 @@ int main(int argc, char *argv[]) {
     bool ip_set_match = ipset_contains_ipv4(ip_set, &cip);
 
     uint64_t hm_res = hm_find(hm_db, ip);
-    bool hm_match = hm_res != hm_no_value;
+    bool hm_match = hm_res != HM_NO_VALUE;
 
     if (hyperscan_match != ip_set_match) {
       printf("MISMATCH! hyperscan=%b ip_set=%b ", hyperscan_match,
@@ -312,7 +312,7 @@ int main(int argc, char *argv[]) {
   free(hm_db_place0);
   hm_database_t *hm_db2;
   hm_err = hm_db_from_place(hm_db2_place, hm_used, &hm_db2);
-  if (hm_err != hm_success) {
+  if (hm_err != HM_SUCCESS) {
     printf("hm_compile failed: %d.\n", hm_err);
     return 1;
   }
@@ -323,7 +323,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < SAMPLE_SIZE; i++) {
     ip = hash32(ip);
     uint64_t hm_res = hm_find(hm_db2, ip);
-    if (hm_res != hm_no_value) {
+    if (hm_res != HM_NO_VALUE) {
       hipermap_sum++;
     }
   }
