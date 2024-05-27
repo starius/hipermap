@@ -113,11 +113,19 @@ hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
   std::vector<hm_elem> sorted;
   std::vector<hm_elem> ends_stack;
 
-  hm_elem elem{
-      .ip = 0,
-      .value = HM_NO_VALUE,
+  auto pushToSorted = [&sorted](uint32_t ip, uint64_t value) {
+    if (!sorted.empty() && sorted.back().ip == ip) {
+      sorted.back().value = value;
+    } else {
+      hm_elem elem{
+          .ip = ip,
+          .value = value,
+      };
+      sorted.push_back(elem);
+    }
   };
-  sorted.push_back(elem);
+
+  pushToSorted(0, HM_NO_VALUE);
 
   for (hm_input_elem input : inputs) {
     debugf("\ninput.ip=%x input.cidr_prefix=%d input.value=%d\n", input.ip,
@@ -132,11 +140,7 @@ hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
       if (!ends_stack.empty()) {
         reopened_value = ends_stack.back().value;
       }
-      hm_elem elem{
-          .ip = end_ip,
-          .value = reopened_value,
-      };
-      sorted.push_back(elem);
+      pushToSorted(end_ip, reopened_value);
       debugf("sorted.push_back reopened ip=%x input.value=%d\n", end_ip,
              reopened_value);
     }
@@ -151,11 +155,7 @@ hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
       ends_stack.pop_back();
     }
 
-    hm_elem elem{
-        .ip = input.ip,
-        .value = input.value,
-    };
-    sorted.push_back(elem);
+    pushToSorted(input.ip, input.value);
     debugf("sorted.push_back elem ip=%x input.value=%d\n", input.ip,
            input.value);
 
@@ -188,25 +188,19 @@ hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
   if (!ends_stack.empty()) {
     // Close one zone from stack. No ned to close more zones, because
     // their closing IP goes after.
-    hm_elem elem{
-        .ip = ends_stack.back().ip,
-        .value = HM_NO_VALUE,
-    };
-    sorted.push_back(elem);
-    debugf("sorted.push_back final ip=%x input.value=%d\n", elem.ip,
-           elem.value);
+    pushToSorted(ends_stack.back().ip, HM_NO_VALUE);
+    debugf("sorted.push_back final ip=%x input.value=%d\n",
+           ends_stack.back().ip, HM_NO_VALUE);
   }
 
   // Append an element larger than largest possible IP.
   // There is a check in the beginning of hm_find that IP <= 255.0.0.0.
   {
-    hm_elem elem{
-        .ip = 0x00000000, // After -1 below it becomes the largest value.
-        .value = HM_NO_VALUE,
-    };
-    sorted.push_back(elem);
-    debugf("sorted.push_back final2 ip=%x input.value=%d\n", elem.ip,
-           elem.value);
+    uint32_t ip = 0x00000000;
+    uint64_t value = HM_NO_VALUE;
+    // After -1 below it becomes the largest value.
+    pushToSorted(ip, value);
+    debugf("sorted.push_back final2 ip=%x input.value=%d\n", ip, value);
   }
 
   // Shift all IPs to compare as signed integers.
