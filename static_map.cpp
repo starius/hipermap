@@ -35,7 +35,8 @@ typedef struct hm_database {
   uint64_t *values;
 } hm_database_t;
 
-size_t hm_db_place_size(unsigned int elements) {
+extern "C" HM_PUBLIC_API size_t HM_CDECL
+hm_db_place_size(unsigned int elements) {
   // +1 for 0.0.0.0 and +1 for 255.255.255.255.
   size_t max_sorted_size = elements * 2 + 2;
   if (max_sorted_size % 2 == 1) {
@@ -67,28 +68,28 @@ static size_t hm_aligned_size(size_t list_size) {
   return list_size + (list_size & 1);
 }
 
-hm_error_t hm_compile(char *db_place, size_t db_place_size,
-                      hm_database_t **db_ptr, const uint32_t *ips,
-                      const uint8_t *cidr_prefixes, const uint64_t *values,
-                      unsigned int elements) {
+extern "C" HM_PUBLIC_API hm_error_t HM_CDECL
+hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
+           const uint32_t *ips, const uint8_t *cidr_prefixes,
+           const uint64_t *values, unsigned int elements) {
   if (elements == 0) {
-    return hm_error_no_masks;
+    return HM_ERROR_NO_MASKS;
   }
 
   // Check alignment.
   if (reinterpret_cast<uintptr_t>(db_place) % alignment != 0) {
-    return hm_error_bad_alignment;
+    return HM_ERROR_BAD_ALIGNMENT;
   }
 
   if (db_place_size < sizeof(hm_database_t)) {
-    return hm_error_small_place;
+    return HM_ERROR_SMALL_PLACE;
   }
 
   std::vector<hm_input_elem> inputs;
   inputs.reserve(elements);
   for (int i = 0; i < elements; i++) {
-    if (values[i] == hm_no_value) {
-      return 3;
+    if (values[i] == HM_NO_VALUE) {
+      return HM_ERROR_BAD_VALUE;
     }
 
     hm_input_elem elem{
@@ -114,7 +115,7 @@ hm_error_t hm_compile(char *db_place, size_t db_place_size,
 
   hm_elem elem{
       .ip = 0,
-      .value = hm_no_value,
+      .value = HM_NO_VALUE,
   };
   sorted.push_back(elem);
 
@@ -127,7 +128,7 @@ hm_error_t hm_compile(char *db_place, size_t db_place_size,
       debugf("ends_stack.pop_back() (ends_stack.back().ip %x < input.ip %x)\n",
              end_ip, input.ip);
       ends_stack.pop_back();
-      uint64_t reopened_value = hm_no_value;
+      uint64_t reopened_value = HM_NO_VALUE;
       if (!ends_stack.empty()) {
         reopened_value = ends_stack.back().value;
       }
@@ -189,7 +190,7 @@ hm_error_t hm_compile(char *db_place, size_t db_place_size,
     // their closing IP goes after.
     hm_elem elem{
         .ip = ends_stack.back().ip,
-        .value = hm_no_value,
+        .value = HM_NO_VALUE,
     };
     sorted.push_back(elem);
     debugf("sorted.push_back final ip=%x input.value=%d\n", elem.ip,
@@ -201,7 +202,7 @@ hm_error_t hm_compile(char *db_place, size_t db_place_size,
   {
     hm_elem elem{
         .ip = 0x00000000, // After -1 below it becomes the largest value.
-        .value = hm_no_value,
+        .value = HM_NO_VALUE,
     };
     sorted.push_back(elem);
     debugf("sorted.push_back final2 ip=%x input.value=%d\n", elem.ip,
@@ -219,7 +220,7 @@ hm_error_t hm_compile(char *db_place, size_t db_place_size,
   db_place += sizeof(hm_database_t);
 
   if (db_place_size < hm_place_used(db)) {
-    return hm_error_small_place;
+    return HM_ERROR_SMALL_PLACE;
   }
 
   db->hashtable = reinterpret_cast<uint32_t *>(db_place);
@@ -244,16 +245,18 @@ hm_error_t hm_compile(char *db_place, size_t db_place_size,
     db->hashtable[hash] = index;
   }
 
-  return 0;
+  return HM_SUCCESS;
 }
 
-size_t hm_place_used(const hm_database_t *db) {
+extern "C" HM_PUBLIC_API size_t HM_CDECL
+hm_place_used(const hm_database_t *db) {
   return sizeof(hm_database_t) + hm_hashtable_size_bytes +
          hm_aligned_size(db->list_size) * sizeof(uint32_t) +
          db->list_size * sizeof(uint64_t);
 }
 
-uint64_t hm_find(const hm_database_t *db, const uint32_t ip0) {
+extern "C" HM_PUBLIC_API uint64_t HM_CDECL hm_find(const hm_database_t *db,
+                                                   const uint32_t ip0) {
   // Use the hash table to find /16 place in the sorted list and use binary
   // search inside it.
   uint32_t begin = db->hashtable[ip0 >> 16];
@@ -272,15 +275,15 @@ uint64_t hm_find(const hm_database_t *db, const uint32_t ip0) {
   return db->values[index];
 }
 
-hm_error_t hm_db_from_place(char *db_place, size_t db_place_size,
-                            hm_database_t **db_ptr) {
+extern "C" HM_PUBLIC_API hm_error_t HM_CDECL
+hm_db_from_place(char *db_place, size_t db_place_size, hm_database_t **db_ptr) {
   // Check alignment.
   if (reinterpret_cast<uintptr_t>(db_place) % alignment != 0) {
-    return hm_error_bad_alignment;
+    return HM_ERROR_BAD_ALIGNMENT;
   }
 
   if (db_place_size < sizeof(hm_database_t)) {
-    return hm_error_small_place;
+    return HM_ERROR_SMALL_PLACE;
   }
 
   hm_database_t *db = reinterpret_cast<hm_database_t *>(db_place);
@@ -296,8 +299,8 @@ hm_error_t hm_db_from_place(char *db_place, size_t db_place_size,
   db->values = reinterpret_cast<uint64_t *>(db_place);
 
   if (db_place_size < hm_place_used(db)) {
-    return hm_error_small_place;
+    return HM_ERROR_SMALL_PLACE;
   }
 
-  return 0;
+  return HM_SUCCESS;
 }
