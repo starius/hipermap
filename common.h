@@ -36,6 +36,9 @@ typedef int hm_error_t;
 // HM_ERROR_BAD_VALUE is returned if the value is invalid.
 #define HM_ERROR_BAD_VALUE (3)
 
+// HM_ERROR_BAD_SIZE is returned if size value is incorrect.
+#define HM_ERROR_BAD_SIZE (5)
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

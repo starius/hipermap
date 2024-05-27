@@ -12,7 +12,7 @@ project(
   LANGUAGES C CXX
 )
 
-add_library(hipermap static_map.cpp)
+add_library(hipermap static_map.cpp cache.c)
 
 add_executable(main main.c)
 
@@ -21,4 +21,10 @@ target_link_libraries(main
   PRIVATE hs
   PRIVATE ipset
   PRIVATE cork
+)
+
+add_executable(test_cache test_cache.c)
+
+target_link_libraries(test_cache
+  PRIVATE hipermap
 )
