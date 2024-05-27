@@ -185,12 +185,21 @@ hm_compile(char *db_place, size_t db_place_size, hm_database_t **db_ptr,
     }
   }
 
-  if (!ends_stack.empty()) {
-    // Close one zone from stack. No ned to close more zones, because
-    // their closing IP goes after.
-    pushToSorted(ends_stack.back().ip, HM_NO_VALUE);
-    debugf("sorted.push_back final ip=%x input.value=%d\n",
-           ends_stack.back().ip, HM_NO_VALUE);
+  // Close ending zones. Since zones can be nested, they can produce
+  // non-empty values (all but last).
+  while (!ends_stack.empty()) {
+    // Some zone stops before this zone starts.
+    uint32_t end_ip = ends_stack.back().ip;
+    debugf("ends_stack.pop_back() (ends_stack.back().ip %x < input.ip %x)\n",
+           end_ip, input.ip);
+    ends_stack.pop_back();
+    uint64_t reopened_value = HM_NO_VALUE;
+    if (!ends_stack.empty()) {
+      reopened_value = ends_stack.back().value;
+    }
+    pushToSorted(end_ip, reopened_value);
+    debugf("sorted.push_back reopened ip=%x input.value=%d\n", end_ip,
+           reopened_value);
   }
 
   // Append an element larger than largest possible IP.
