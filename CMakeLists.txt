@@ -13,9 +13,13 @@ project(
 )
 
 add_library(hipermap static_map.cpp)
+set_target_properties(hipermap PROPERTIES PUBLIC_HEADER "common.h;static_map.h")
+install(
+        TARGETS hipermap
+        PUBLIC_HEADER DESTINATION include/hipermap
+)
 
 add_executable(main main.c)
-
 target_link_libraries(main
   PRIVATE hipermap
   PRIVATE hs
