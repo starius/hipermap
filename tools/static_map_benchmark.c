@@ -76,12 +76,6 @@ void fill_ip(char *bytes, uint32_t ip) {
   bytes[3] = ip & 0xFF;
 }
 
-const size_t alignment = 8;
-
-char *align8(char *addr) {
-  return (char *)(((uintptr_t)(addr) & ~(alignment - 1)) + alignment);
-}
-
 void print_ip(uint32_t ip) {
   unsigned char bytes[4];
   fill_ip(bytes, ip);
@@ -190,8 +184,7 @@ int main(int argc, char *argv[]) {
   }
 
   size_t hm_db_place_len = hm_sm_db_place_size(len);
-  char *hm_db_place0 = malloc(hm_db_place_len + alignment);
-  char *hm_db_place = align8(hm_db_place0);
+  char *hm_db_place = malloc(hm_db_place_len);
   hm_sm_database_t *hm_db;
   hm_error_t hm_err = hm_sm_compile(hm_db_place, hm_db_place_len, &hm_db, ips,
                                     cidr_prefixes, values, len);
@@ -199,9 +192,7 @@ int main(int argc, char *argv[]) {
     printf("hm_sm_compile failed: %d.\n", hm_err);
     return 1;
   }
-  size_t hm_used = hm_sm_place_used(hm_db);
-  printf("size of hipermap db is: %d/%d bytes.\n", (int)hm_used,
-         (int)hm_db_place_len);
+  printf("size of hipermap db is: %d bytes.\n", (int)hm_db_place_len);
 
   // Check edge cases.
   uint64_t v1 = hm_sm_find(hm_db, 0x00000000);
@@ -306,16 +297,32 @@ int main(int argc, char *argv[]) {
   printf("One IP is analyzed in %g s\n", benchmark_time / SAMPLE_SIZE);
   printf("Found %d matches.\n", ip_set_sum);
 
-  // Recover hipermap database from hm_db_place.
-  char *hm_db2_place = malloc(hm_used);
-  memcpy(hm_db2_place, hm_db_place, hm_used);
-  free(hm_db_place0);
-  hm_sm_database_t *hm_db2;
-  hm_err = hm_sm_db_from_place(hm_db2_place, hm_used, &hm_db2);
+  // Serialize the db.
+  size_t ser_size = hm_sm_serialized_size(hm_db);
+  char *ser = malloc(ser_size);
+  hm_err = hm_sm_serialize(ser, ser_size, hm_db);
   if (hm_err != HM_SUCCESS) {
-    printf("hm_sm_compile failed: %d.\n", hm_err);
+    printf("hm_sm_serialize failed: %d.\n", hm_err);
     return 1;
   }
+  printf("size of serialized hipermap db is: %d bytes.\n", (int)ser_size);
+
+  // Deserialize the db.
+  size_t db_place_size2;
+  hm_err = hm_sm_db_place_size_from_serialized(&db_place_size2, ser, ser_size);
+  if (hm_err != HM_SUCCESS) {
+    printf("hm_sm_db_place_size_from_serialized failed: %d.\n", hm_err);
+    return 1;
+  }
+  char *db_place2 = malloc(db_place_size2);
+  hm_sm_database_t *hm_db2;
+  hm_err = hm_sm_deserialize(db_place2, db_place_size2, &hm_db2, ser, ser_size);
+  if (hm_err != HM_SUCCESS) {
+    printf("hm_sm_deserialize failed: %d.\n", hm_err);
+    return 1;
+  }
+  printf("memory usage of deserialized hipermap db is: %d bytes.\n",
+         (int)db_place_size2);
 
   clock_gettime(CLOCK_MONOTONIC, &benchmark_start);
   ip = 1;

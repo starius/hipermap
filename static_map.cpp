@@ -35,18 +35,6 @@ typedef struct hm_sm_database {
   uint64_t *values;
 } hm_sm_database_t;
 
-extern "C" HM_PUBLIC_API size_t HM_CDECL
-hm_sm_db_place_size(unsigned int elements) {
-  // +1 for 0.0.0.0 and +1 for 255.255.255.255.
-  size_t max_sorted_size = elements * 2 + 2;
-  if (max_sorted_size % 2 == 1) {
-    // Alignment.
-    max_sorted_size++;
-  }
-  return sizeof(hm_sm_database_t) + hm_hashtable_size_bytes +
-         max_sorted_size * (sizeof(uint32_t) + sizeof(uint64_t));
-}
-
 struct hm_input_elem {
   uint32_t ip;
   uint8_t cidr_prefix;
@@ -58,14 +46,51 @@ struct hm_elem {
   uint64_t value;
 };
 
-static uint32_t hm_end_ip_of_zone(uint32_t ip, uint8_t cidr_prefix) {
+static inline uint32_t hm_end_ip_of_zone(uint32_t ip, uint8_t cidr_prefix) {
   uint32_t zero_bits = 32 - cidr_prefix;
   return (((ip) >> zero_bits) + 1) << zero_bits;
 }
 
 // Round up to even number.
-static size_t hm_aligned_size(size_t list_size) {
+static inline size_t hm_aligned_size(size_t list_size) {
   return list_size + (list_size & 1);
+}
+
+static inline char *align8(char *addr) {
+  return (char *)(((uintptr_t)(addr) & ~(alignment - 1)) + alignment);
+}
+
+static inline size_t list_size_to_db_place_size(size_t list_size) {
+  return sizeof(hm_sm_database_t) + hm_hashtable_size_bytes +
+         hm_aligned_size(list_size) * sizeof(uint32_t) +
+         list_size * sizeof(uint64_t);
+}
+
+static inline size_t list_size_to_serialized_size(size_t list_size) {
+  // Serialized form:
+  // uint64_t list_size
+  // list_size * uint32_t elements - max_ips.
+  // list_size * uint64_t elements - values.
+  // The order of bytes is host.
+  return 8 + list_size * (4 + 8);
+}
+
+static inline void fill_hashtable(hm_sm_database_t *db) {
+  int32_t *db_ips_end = db->max_ips + db->list_size;
+  for (uint32_t hash = 0; hash <= hm_max_hash; hash++) {
+    uint32_t ip = hash << 16;
+    const int32_t *it =
+        std::lower_bound(db->max_ips, db_ips_end, int32_t(ip ^ ip_xor));
+    size_t index = it - db->max_ips;
+    db->hashtable[hash] = index;
+  }
+}
+
+extern "C" HM_PUBLIC_API size_t HM_CDECL
+hm_sm_db_place_size(unsigned int elements) {
+  // +1 for 0.0.0.0 and +1 for 255.255.255.255.
+  size_t max_sorted_size = elements * 2 + 2;
+  return list_size_to_db_place_size(max_sorted_size) + alignment;
 }
 
 extern "C" HM_PUBLIC_API hm_error_t HM_CDECL
@@ -76,9 +101,11 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
     return HM_ERROR_NO_MASKS;
   }
 
-  // Check alignment.
-  if (reinterpret_cast<uintptr_t>(db_place) % alignment != 0) {
-    return HM_ERROR_BAD_ALIGNMENT;
+  // Align db_place forward, if needed.
+  {
+    char *db_place2 = align8(db_place);
+    db_place_size -= (db_place2 - db_place);
+    db_place = db_place2;
   }
 
   if (db_place_size < sizeof(hm_sm_database_t)) {
@@ -226,7 +253,7 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
   db->list_size = sorted.size() - 1;
   db_place += sizeof(hm_sm_database_t);
 
-  if (db_place_size < hm_sm_place_used(db)) {
+  if (db_place_size < list_size_to_db_place_size(db->list_size)) {
     return HM_ERROR_SMALL_PLACE;
   }
 
@@ -243,23 +270,9 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
     db->values[i] = sorted[i].value;
   }
 
-  int32_t *db_ips_end = db->max_ips + sorted.size() - 1;
-  for (uint32_t hash = 0; hash <= hm_max_hash; hash++) {
-    uint32_t ip = hash << 16;
-    const int32_t *it =
-        std::lower_bound(db->max_ips, db_ips_end, int32_t(ip ^ ip_xor));
-    size_t index = it - db->max_ips;
-    db->hashtable[hash] = index;
-  }
+  fill_hashtable(db);
 
   return HM_SUCCESS;
-}
-
-extern "C" HM_PUBLIC_API size_t HM_CDECL
-hm_sm_place_used(const hm_sm_database_t *db) {
-  return sizeof(hm_sm_database_t) + hm_hashtable_size_bytes +
-         hm_aligned_size(db->list_size) * sizeof(uint32_t) +
-         db->list_size * sizeof(uint64_t);
 }
 
 extern "C" HM_PUBLIC_API uint64_t HM_CDECL
@@ -282,32 +295,112 @@ hm_sm_find(const hm_sm_database_t *db, const uint32_t ip0) {
   return db->values[index];
 }
 
-extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_db_from_place(
-    char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr) {
-  // Check alignment.
-  if (reinterpret_cast<uintptr_t>(db_place) % alignment != 0) {
-    return HM_ERROR_BAD_ALIGNMENT;
-  }
+extern "C" HM_PUBLIC_API size_t HM_CDECL
+hm_sm_serialized_size(const hm_sm_database_t *db) {
+  return list_size_to_serialized_size(db->list_size);
+}
 
-  if (db_place_size < sizeof(hm_sm_database_t)) {
+extern "C" HM_PUBLIC_API hm_error_t HM_CDECL
+hm_sm_serialize(char *buffer, size_t buffer_size, const hm_sm_database_t *db) {
+  if (buffer_size < hm_sm_serialized_size(db)) {
     return HM_ERROR_SMALL_PLACE;
   }
 
+  uint64_t *list_size = reinterpret_cast<uint64_t *>(buffer);
+  *list_size = db->list_size;
+  buffer += sizeof(uint64_t);
+
+  uint32_t *max_ips = reinterpret_cast<uint32_t *>(buffer);
+  for (int i = 0; i < db->list_size; i++) {
+    max_ips[i] = db->max_ips[i];
+  }
+  buffer += sizeof(uint32_t) * db->list_size;
+
+  uint64_t *values = reinterpret_cast<uint64_t *>(buffer);
+  for (int i = 0; i < db->list_size; i++) {
+    values[i] = db->values[i];
+  }
+
+  return HM_SUCCESS;
+}
+
+extern "C" HM_PUBLIC_API hm_error_t HM_CDECL
+hm_sm_db_place_size_from_serialized(size_t *db_place_size, const char *buffer,
+                                    size_t buffer_size) {
+  if (buffer_size < sizeof(uint64_t)) {
+    return HM_ERROR_SMALL_PLACE;
+  }
+
+  const uint64_t *list_size = reinterpret_cast<const uint64_t *>(buffer);
+  if (buffer_size < list_size_to_serialized_size(*list_size)) {
+    return HM_ERROR_SMALL_PLACE;
+  }
+
+  if (*list_size == 0) {
+    return HM_ERROR_NO_MASKS;
+  }
+
+  *db_place_size = list_size_to_db_place_size(*list_size) + alignment;
+
+  return HM_SUCCESS;
+}
+
+extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_deserialize(
+    char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
+    const char *buffer, size_t buffer_size) {
+  if (buffer_size < sizeof(uint64_t)) {
+    return HM_ERROR_SMALL_PLACE;
+  }
+
+  const uint64_t *list_size = reinterpret_cast<const uint64_t *>(buffer);
+  if (buffer_size < list_size_to_serialized_size(*list_size)) {
+    return HM_ERROR_SMALL_PLACE;
+  }
+
+  if (*list_size == 0) {
+    return HM_ERROR_NO_MASKS;
+  }
+
+  // Align db_place forward, if needed.
+  {
+    char *db_place2 = align8(db_place);
+    db_place_size -= (db_place2 - db_place);
+    db_place = db_place2;
+  }
+
+  if (db_place_size < list_size_to_db_place_size(*list_size)) {
+    return HM_ERROR_SMALL_PLACE;
+  }
+
+  // Locate max_ips and values in the db_place.
   hm_sm_database_t *db = reinterpret_cast<hm_sm_database_t *>(db_place);
   *db_ptr = db;
+  db->list_size = *list_size;
   db_place += sizeof(hm_sm_database_t);
 
   db->hashtable = reinterpret_cast<uint32_t *>(db_place);
   db_place += hm_hashtable_size_bytes;
 
   db->max_ips = reinterpret_cast<int32_t *>(db_place);
-  db_place += hm_aligned_size(db->list_size) * sizeof(uint32_t);
+  db_place += hm_aligned_size(*list_size) * sizeof(uint32_t);
 
   db->values = reinterpret_cast<uint64_t *>(db_place);
 
-  if (db_place_size < hm_sm_place_used(db)) {
-    return HM_ERROR_SMALL_PLACE;
+  // Now locate max_ips and values in the buffer.
+  buffer += sizeof(uint64_t);
+  const uint32_t *max_ips = reinterpret_cast<const uint32_t *>(buffer);
+  buffer += sizeof(uint32_t) * (*list_size);
+  const uint64_t *values = reinterpret_cast<const uint64_t *>(buffer);
+
+  // Copy the values.
+  for (int i = 0; i < *list_size; i++) {
+    db->max_ips[i] = max_ips[i];
   }
+  for (int i = 0; i < *list_size; i++) {
+    db->values[i] = values[i];
+  }
+
+  fill_hashtable(db);
 
   return HM_SUCCESS;
 }
