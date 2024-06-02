@@ -8,7 +8,7 @@
 #include <hs/hs.h>
 #include <ipset/ipset.h>
 
-#include "static_map.h"
+#include "../static_map.h"
 
 const size_t IP_REGEXP_BUF_LEN =
     1 + 4 * 3 + 11 + 1; // ^, 3 bytes, one [] range, one zero byte.

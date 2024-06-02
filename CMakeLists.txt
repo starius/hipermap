@@ -19,8 +19,8 @@ install(
         PUBLIC_HEADER DESTINATION include/hipermap
 )
 
-add_executable(main main.c)
-target_link_libraries(main
+add_executable(static_map_benchmark tools/static_map_benchmark.c)
+target_link_libraries(static_map_benchmark
   PRIVATE hipermap
   PRIVATE hs
   PRIVATE ipset
