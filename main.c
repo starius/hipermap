@@ -189,23 +189,23 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  size_t hm_db_place_len = hm_db_place_size(len);
+  size_t hm_db_place_len = hm_sm_db_place_size(len);
   char *hm_db_place0 = malloc(hm_db_place_len + alignment);
   char *hm_db_place = align8(hm_db_place0);
-  hm_database_t *hm_db;
-  hm_error_t hm_err = hm_compile(hm_db_place, hm_db_place_len, &hm_db, ips,
-                                 cidr_prefixes, values, len);
+  hm_sm_database_t *hm_db;
+  hm_error_t hm_err = hm_sm_compile(hm_db_place, hm_db_place_len, &hm_db, ips,
+                                    cidr_prefixes, values, len);
   if (hm_err != HM_SUCCESS) {
-    printf("hm_compile failed: %d.\n", hm_err);
+    printf("hm_sm_compile failed: %d.\n", hm_err);
     return 1;
   }
-  size_t hm_used = hm_place_used(hm_db);
+  size_t hm_used = hm_sm_place_used(hm_db);
   printf("size of hipermap db is: %d/%d bytes.\n", (int)hm_used,
          (int)hm_db_place_len);
 
   // Check edge cases.
-  uint64_t v1 = hm_find(hm_db, 0x00000000);
-  uint64_t v2 = hm_find(hm_db, 0xFFFFFFFF);
+  uint64_t v1 = hm_sm_find(hm_db, 0x00000000);
+  uint64_t v2 = hm_sm_find(hm_db, 0xFFFFFFFF);
   assert(v1 == HM_NO_VALUE);
   assert(v2 == HM_NO_VALUE);
 
@@ -237,7 +237,7 @@ int main(int argc, char *argv[]) {
         ._ = {.u8 = {ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]}}};
     bool ip_set_match = ipset_contains_ipv4(ip_set, &cip);
 
-    uint64_t hm_res = hm_find(hm_db, ip);
+    uint64_t hm_res = hm_sm_find(hm_db, ip);
     bool hm_match = hm_res != HM_NO_VALUE;
 
     if (hyperscan_match != ip_set_match) {
@@ -310,10 +310,10 @@ int main(int argc, char *argv[]) {
   char *hm_db2_place = malloc(hm_used);
   memcpy(hm_db2_place, hm_db_place, hm_used);
   free(hm_db_place0);
-  hm_database_t *hm_db2;
-  hm_err = hm_db_from_place(hm_db2_place, hm_used, &hm_db2);
+  hm_sm_database_t *hm_db2;
+  hm_err = hm_sm_db_from_place(hm_db2_place, hm_used, &hm_db2);
   if (hm_err != HM_SUCCESS) {
-    printf("hm_compile failed: %d.\n", hm_err);
+    printf("hm_sm_compile failed: %d.\n", hm_err);
     return 1;
   }
 
@@ -322,7 +322,7 @@ int main(int argc, char *argv[]) {
   int hipermap_sum = 0;
   for (int i = 0; i < SAMPLE_SIZE; i++) {
     ip = hash32(ip);
-    uint64_t hm_res = hm_find(hm_db2, ip);
+    uint64_t hm_res = hm_sm_find(hm_db2, ip);
     if (hm_res != HM_NO_VALUE) {
       hipermap_sum++;
     }
