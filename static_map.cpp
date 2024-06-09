@@ -225,8 +225,7 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
   while (!ends_stack.empty()) {
     // Some zone stops before this zone starts.
     uint32_t end_ip = ends_stack.back().ip;
-    debugf("ends_stack.pop_back() (ends_stack.back().ip %x < input.ip %x)\n",
-           end_ip, input.ip);
+    debugf("ends_stack.pop_back() (ends_stack.back().ip %x)\n", end_ip);
     ends_stack.pop_back();
     uint64_t reopened_value = HM_NO_VALUE;
     if (!ends_stack.empty()) {
