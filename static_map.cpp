@@ -123,6 +123,10 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
       return HM_ERROR_BAD_RANGE;
     }
 
+    if (cidr_prefixes[i] == 0 || cidr_prefixes[i] > 32) {
+      return HM_ERROR_BAD_RANGE;
+    }
+
     hm_input_elem elem{
         .ip = ips[i],
         .cidr_prefix = cidr_prefixes[i],
