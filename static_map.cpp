@@ -11,9 +11,13 @@ const int hm_hashtable_size_bytes = 256 * 256 * sizeof(uint32_t);
 const uint16_t hm_max_hash = 65535; // 256*256-1.
 const size_t alignment = 8;
 
+#ifdef NDEBUG
 #define debugf(fmt, ...)                                                       \
   do {                                                                         \
   } while (0)
+#else
+#define debugf printf
+#endif
 
 // Integer comparisons in SSE and AVX are always signed. To compare unsigned
 // integers the operands have to be biased by subtracting the smallest signed
