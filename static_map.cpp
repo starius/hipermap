@@ -70,13 +70,22 @@ static inline size_t list_size_to_db_place_size(size_t list_size) {
          list_size * sizeof(uint64_t);
 }
 
-static inline size_t list_size_to_serialized_size(size_t list_size) {
+static inline hm_error_t list_size_to_serialized_size(size_t *out,
+                                                      size_t list_size) {
   // Serialized form:
   // uint64_t list_size
   // list_size * uint32_t elements - max_ips.
   // list_size * uint64_t elements - values.
   // The order of bytes is host.
-  return 8 + list_size * (4 + 8);
+  size_t res = 8 + list_size * (4 + 8);
+
+  // Check against overflow.
+  if ((res - 8) / (4 + 8) != list_size) {
+    return HM_ERROR_SMALL_PLACE;
+  }
+
+  *out = res;
+  return HM_SUCCESS;
 }
 
 static inline void fill_hashtable(hm_sm_database_t *db) {
@@ -307,7 +316,11 @@ hm_sm_find(const hm_sm_database_t *db, const uint32_t ip0) {
 
 extern "C" HM_PUBLIC_API size_t HM_CDECL
 hm_sm_serialized_size(const hm_sm_database_t *db) {
-  return list_size_to_serialized_size(db->list_size);
+  size_t want_buffer_size;
+  hm_error_t hm_err =
+      list_size_to_serialized_size(&want_buffer_size, db->list_size);
+  assert(hm_err == HM_SUCCESS);
+  return want_buffer_size;
 }
 
 extern "C" HM_PUBLIC_API hm_error_t HM_CDECL
@@ -342,7 +355,13 @@ hm_sm_db_place_size_from_serialized(size_t *db_place_size, const char *buffer,
   }
 
   const uint64_t *list_size = reinterpret_cast<const uint64_t *>(buffer);
-  if (buffer_size < list_size_to_serialized_size(*list_size)) {
+  size_t want_buffer_size;
+  hm_error_t hm_err =
+      list_size_to_serialized_size(&want_buffer_size, *list_size);
+  if (hm_err != HM_SUCCESS) {
+    return hm_err;
+  }
+  if (buffer_size < want_buffer_size) {
     return HM_ERROR_SMALL_PLACE;
   }
 
@@ -363,7 +382,13 @@ extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_deserialize(
   }
 
   const uint64_t *list_size = reinterpret_cast<const uint64_t *>(buffer);
-  if (buffer_size < list_size_to_serialized_size(*list_size)) {
+  size_t want_buffer_size;
+  hm_error_t hm_err =
+      list_size_to_serialized_size(&want_buffer_size, *list_size);
+  if (hm_err != HM_SUCCESS) {
+    return hm_err;
+  }
+  if (buffer_size < want_buffer_size) {
     return HM_ERROR_SMALL_PLACE;
   }
 
