@@ -165,7 +165,10 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
   for (hm_input_elem input : inputs) {
     debugf("\ninput.ip=%x input.cidr_prefix=%d input.value=%d\n", input.ip,
            input.cidr_prefix, input.value);
-    while (!ends_stack.empty() && ends_stack.back().ip < input.ip) {
+    // The check "ends_stack.back().ip != 0" is needed because a range ending
+    // in the end of the whole space (e.g. 128.0.0.0/1) the end is 0 (overflow).
+    while (!ends_stack.empty() && ends_stack.back().ip < input.ip &&
+           ends_stack.back().ip != 0) {
       // Some zone stops before this zone starts.
       uint32_t end_ip = ends_stack.back().ip;
       debugf("ends_stack.pop_back() (ends_stack.back().ip %x < input.ip %x)\n",
@@ -204,11 +207,11 @@ hm_sm_compile(char *db_place, size_t db_place_size, hm_sm_database_t **db_ptr,
              input.value, ends_stack.back().ip);
     } else {
       if (!ends_stack.empty()) {
-        if (ends_stack.back().ip <= end_ip) {
+        if (ends_stack.back().ip <= end_ip && ends_stack.back().ip != 0) {
           debugf("ends_stack.back().ip=%x end_ip=%x\n", ends_stack.back().ip,
                  end_ip);
         }
-        assert(ends_stack.back().ip > end_ip);
+        assert(ends_stack.back().ip > end_ip || ends_stack.back().ip == 0);
       }
       // Add new element to the stack.
       hm_elem elem{
