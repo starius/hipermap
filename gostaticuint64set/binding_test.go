@@ -93,6 +93,67 @@ func TestLarge(t *testing.T) {
 	}
 }
 
+func TestBenchmark(t *testing.T) {
+	r := rand.New(rand.NewSource(200))
+
+	const N = 10000
+	keys := make([]uint64, 0, N)
+	set := make(map[uint64]struct{}, len(keys))
+	for len(keys) < N {
+		key := r.Uint64()
+		if key == 0 {
+			continue
+		}
+		if _, has := set[key]; has {
+			continue
+		}
+		set[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	db, err := Compile(keys)
+	require.NoError(t, err)
+
+	const M = 10000000
+
+	got := db.Benchmark(keys[0], keys[0]+M)
+
+	want := uint64(0)
+	for key := keys[0]; key != keys[0]+M; key++ {
+		if _, has := set[key]; has {
+			want++
+		}
+	}
+
+	require.Equal(t, want, got)
+}
+
+func BenchmarkLarge(b *testing.B) {
+	r := rand.New(rand.NewSource(300))
+
+	const N = 1500
+	keys := make([]uint64, 0, N)
+	set := make(map[uint64]struct{}, len(keys))
+	for len(keys) < N {
+		key := r.Uint64()
+		if key == 0 {
+			continue
+		}
+		if _, has := set[key]; has {
+			continue
+		}
+		set[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	db, err := Compile(keys)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+
+	_ = db.Benchmark(keys[0], keys[0]+uint64(b.N))
+}
+
 func FuzzFind(f *testing.F) {
 	f.Add([]byte{1, 2, 3, 4, 6, 7, 8})
 

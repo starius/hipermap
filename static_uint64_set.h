@@ -30,6 +30,11 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
 // hm_u64_find returns if the given uint64 key is present in the database.
 bool HM_CDECL hm_u64_find(const hm_u64_database_t *db, const uint64_t key);
 
+// hm_u64_benchmark runs hm_u64_find on a range of inputs and returns the number
+// of hits. It is used to microbenchmark the search.
+uint64_t HM_CDECL hm_u64_benchmark(const hm_u64_database_t *db,
+                                   uint64_t begin_key, uint64_t end_key);
+
 // hm_u64_serialized_size returns how many bytes are needed to serialize the db.
 size_t HM_CDECL hm_u64_serialized_size(const hm_u64_database_t *db);
 

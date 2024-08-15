@@ -201,6 +201,17 @@ bool HM_CDECL hm_u64_find(const hm_u64_database_t *db, const uint64_t key) {
          db->hash_table[b + 2] == key || db->hash_table[b + 3] == key;
 }
 
+HM_PUBLIC_API
+uint64_t HM_CDECL hm_u64_benchmark(const hm_u64_database_t *db,
+                                   uint64_t begin_key, uint64_t end_key) {
+  uint64_t count = 0;
+  for (uint64_t key = begin_key; key != end_key; key++) {
+    count += (uint64_t)(hm_u64_find(db, key));
+  }
+
+  return count;
+}
+
 // Serialized form: factor1, factor2, buckets, then hash_table.
 
 HM_PUBLIC_API

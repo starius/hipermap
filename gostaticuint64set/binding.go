@@ -42,6 +42,10 @@ func (m *StaticUint64Set) Find(key uint64) bool {
 	return bool(C.hm_u64_find(m.db, C.uint64_t(key)))
 }
 
+func (m *StaticUint64Set) Benchmark(beginKey, endKey uint64) uint64 {
+	return uint64(C.hm_u64_benchmark(m.db, C.uint64_t(beginKey), C.uint64_t(endKey)))
+}
+
 func (m *StaticUint64Set) Serialize() ([]byte, error) {
 	serSize := C.hm_u64_serialized_size(m.db)
 	ser := make([]byte, serSize)
