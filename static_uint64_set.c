@@ -11,7 +11,8 @@
 #define debugf printf
 #endif
 
-static const size_t alignment = 8;
+// Alignment is for 4 uint64's to be in one cache line.
+static const size_t alignment = 32;
 
 typedef struct hm_u64_database {
   // Hash table. Elements of the array are uint64 keys.
@@ -22,9 +23,6 @@ typedef struct hm_u64_database {
 
   // Mask to go from hash64 to bucket index.
   uint64_t mask_for_hash;
-
-  // Number of elements in hash table.
-  uint64_t buckets;
 } hm_u64_database_t;
 
 // https://stackoverflow.com/a/6867612
@@ -45,7 +43,7 @@ static inline int round_up_to_power_of_2(int n) {
   return power;
 }
 
-static inline char *align8(char *addr) {
+static inline char *align64(char *addr) {
   return (char *)(((uintptr_t)(addr) & ~(alignment - 1)) + alignment);
 }
 
@@ -64,8 +62,13 @@ static inline int hash_table_buckets(unsigned int elements) {
   return result;
 }
 
+static inline uint64_t get_buckets(const hm_u64_database_t *db) {
+  return db->mask_for_hash + 1 + 3;
+}
+
 static inline void clear_hash_table(hm_u64_database_t *db) {
-  for (int i = 0; i < db->buckets; i++) {
+  uint64_t buckets = get_buckets(db);
+  for (int i = 0; i < buckets; i++) {
     db->hash_table[i] = 0;
   }
 }
@@ -98,7 +101,7 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
 
   // Align db_place forward, if needed.
   {
-    char *db_place2 = align8(db_place);
+    char *db_place2 = align64(db_place);
     db_place_size -= (db_place2 - db_place);
     db_place = db_place2;
   }
@@ -111,7 +114,6 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
 
   // Fill database struct and db_ptr.
   hm_u64_database_t *db = (hm_u64_database_t *)(db_place);
-  db->buckets = buckets;
   db->mask_for_hash = buckets - 1 - 3;
   *db_ptr = db;
   db_place += sizeof(hm_u64_database_t);
@@ -189,6 +191,7 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
   }
 
   debugf("compile factors: %d %d\n", db->factor1, db->factor2);
+  debugf("hash_table: %p\n", db->hash_table);
 
   return HM_SUCCESS;
 }
@@ -216,7 +219,7 @@ uint64_t HM_CDECL hm_u64_benchmark(const hm_u64_database_t *db,
 
 HM_PUBLIC_API
 size_t HM_CDECL hm_u64_serialized_size(const hm_u64_database_t *db) {
-  return (3 + db->buckets) * sizeof(uint64_t);
+  return (3 + get_buckets(db)) * sizeof(uint64_t);
 }
 
 HM_PUBLIC_API
@@ -226,17 +229,19 @@ hm_error_t HM_CDECL hm_u64_serialize(char *buffer, size_t buffer_size,
     return HM_ERROR_SMALL_PLACE;
   }
 
+  uint64_t buckets = get_buckets(db);
+
   uint64_t *dst = (uint64_t *)(buffer);
   *dst = db->factor1;
   dst++;
   *dst = db->factor2;
   dst++;
-  *dst = db->buckets;
+  *dst = buckets;
 
   buffer += 3 * sizeof(uint64_t);
 
   uint64_t *hash_table2 = (uint64_t *)(buffer);
-  for (int i = 0; i < db->buckets; i++) {
+  for (int i = 0; i < buckets; i++) {
     hash_table2[i] = db->hash_table[i];
   }
 
@@ -286,7 +291,7 @@ hm_error_t HM_CDECL hm_u64_deserialize(char *db_place, size_t db_place_size,
 
   // Align db_place forward, if needed.
   {
-    char *db_place2 = align8(db_place);
+    char *db_place2 = align64(db_place);
     db_place_size -= (db_place2 - db_place);
     db_place = db_place2;
   }
@@ -302,8 +307,8 @@ hm_error_t HM_CDECL hm_u64_deserialize(char *db_place, size_t db_place_size,
   src++;
   db->factor2 = *src;
   src++;
-  db->buckets = *src;
-  db->mask_for_hash = db->buckets - 1 - 3;
+  uint64_t buckets = *src;
+  db->mask_for_hash = buckets - 1 - 3;
 
   buffer += 3 * sizeof(uint64_t);
   db_place += sizeof(hm_u64_database_t);
@@ -311,11 +316,13 @@ hm_error_t HM_CDECL hm_u64_deserialize(char *db_place, size_t db_place_size,
   db->hash_table = (uint64_t *)(db_place);
 
   const uint64_t *hash_table0 = (const uint64_t *)(buffer);
-  for (int i = 0; i < db->buckets; i++) {
+  for (int i = 0; i < buckets; i++) {
     db->hash_table[i] = hash_table0[i];
   }
 
   debugf("factors: %d %d\n", db->factor1, db->factor2);
+
+  debugf("hash_table: %p\n", db->hash_table);
 
   return HM_SUCCESS;
 }
