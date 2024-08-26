@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "static_uint64_set.h"
 
@@ -12,6 +13,7 @@
 #endif
 
 // Alignment is for 4 uint64's to be in one cache line.
+static const size_t items_in_bucket = 4;
 static const size_t alignment = 32;
 
 typedef struct hm_u64_database {
@@ -54,7 +56,7 @@ static inline int hash_table_buckets(unsigned int elements) {
   // among N elements put into M 4-bucket groups is 1 - exp(-(N choose 5) /
   // M^4). For 10k elements the factor of 2 works well.
 
-  int result = round_up_to_power_of_2(elements) * 4 * 2;
+  int result = round_up_to_power_of_2(elements) * items_in_bucket * 2;
   if (result < 16) {
     result = 16;
   }
@@ -80,6 +82,12 @@ static inline size_t get_db_place(int buckets) {
 HM_PUBLIC_API
 size_t HM_CDECL hm_u64_db_place_size(unsigned int elements) {
   return get_db_place(hash_table_buckets(elements));
+}
+
+static inline int comp_uint64(const void *elem1, const void *elem2) {
+  int f = *((uint64_t *)elem1);
+  int s = *((uint64_t *)elem2);
+  return (f > s) - (f < s);
 }
 
 HM_PUBLIC_API
@@ -120,6 +128,7 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
 
   db->hash_table = (uint64_t *)(db_place);
   db_place += sizeof(uint64_t) * buckets;
+  uint64_t *hash_table_end = (uint64_t *)(db_place);
 
   // Initiate the hash function with some random values.
   db->factor1 = 0xA6C3096657A14E89;
@@ -176,7 +185,7 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
   // positive).
   uint64_t h0 = hm_u64_hash64(db, 0);
   uint64_t b = h0 & db->mask_for_hash;
-  for (uint64_t shift = 0; shift < 4; shift++) {
+  for (uint64_t shift = 0; shift < items_in_bucket; shift++) {
     uint64_t b0 = b + shift;
     if (db->hash_table[b0] == 0) {
       while (true) {
@@ -188,6 +197,12 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
         }
       }
     }
+  }
+
+  // Sort values insude buckets fot speed.
+  for (uint64_t *start = db->hash_table; start < hash_table_end;
+       start += items_in_bucket) {
+    qsort(start, items_in_bucket, sizeof(uint64_t), comp_uint64);
   }
 
   debugf("compile factors: %d %d\n", db->factor1, db->factor2);
