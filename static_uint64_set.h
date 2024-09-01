@@ -63,4 +63,4 @@ hm_error_t HM_CDECL hm_u64_deserialize(char *db_place, size_t db_place_size,
 } /* extern "C" */
 #endif
 
-#endif // HM_STATIC_MAP_H
+#endif // HM_STATIC_UINT64_SET_H
