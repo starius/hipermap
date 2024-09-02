@@ -12,8 +12,8 @@ project(
   LANGUAGES C CXX
 )
 
-add_library(hipermap static_map.cpp cache.c static_uint64_set.c)
-set_target_properties(hipermap PROPERTIES PUBLIC_HEADER "common.h;static_map.h;cache.h;static_uint64_set.h")
+add_library(hipermap static_map.cpp cache.c static_uint64_set.c static_uint64_map.c)
+set_target_properties(hipermap PROPERTIES PUBLIC_HEADER "common.h;static_map.h;cache.h;static_uint64_set.h;static_uint64_map.h")
 install(
         TARGETS hipermap
         PUBLIC_HEADER DESTINATION include/hipermap
