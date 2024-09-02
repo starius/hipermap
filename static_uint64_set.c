@@ -46,7 +46,7 @@ static inline int round_up_to_power_of_2(int n) {
   return power;
 }
 
-static inline char *align64(char *addr) {
+static inline char *align32(char *addr) {
   return (char *)(((uintptr_t)(addr) & ~(alignment - 1)) + alignment);
 }
 
@@ -110,7 +110,7 @@ hm_error_t HM_CDECL hm_u64_compile(char *db_place, size_t db_place_size,
 
   // Align db_place forward, if needed.
   {
-    char *db_place2 = align64(db_place);
+    char *db_place2 = align32(db_place);
     db_place_size -= (db_place2 - db_place);
     db_place = db_place2;
   }
@@ -307,7 +307,7 @@ hm_error_t HM_CDECL hm_u64_deserialize(char *db_place, size_t db_place_size,
 
   // Align db_place forward, if needed.
   {
-    char *db_place2 = align64(db_place);
+    char *db_place2 = align32(db_place);
     db_place_size -= (db_place2 - db_place);
     db_place = db_place2;
   }
