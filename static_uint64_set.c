@@ -28,7 +28,8 @@ typedef struct hm_u64_database {
 } hm_u64_database_t;
 
 // https://stackoverflow.com/a/6867612
-static uint64_t hm_u64_hash64(const hm_u64_database_t *db, uint64_t key) {
+static inline uint64_t hm_u64_hash64(const hm_u64_database_t *db,
+                                     uint64_t key) {
   key ^= key >> 33;
   key *= db->factor1;
   key ^= key >> 33;
