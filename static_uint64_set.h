@@ -2,6 +2,7 @@
 #define HM_STATIC_UINT64_SET_H
 
 #include <stdbool.h>
+#include <stddef.h>  // size_t
 #include <stdint.h>
 
 #include "common.h"

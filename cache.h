@@ -2,6 +2,7 @@
 #define HM_CACHE_H
 
 #include <stdbool.h>
+#include <stddef.h>  // size_t
 #include <stdint.h>
 
 #include "common.h"

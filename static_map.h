@@ -1,6 +1,7 @@
 #ifndef HM_STATIC_MAP_H
 #define HM_STATIC_MAP_H
 
+#include <stddef.h>  // size_t
 #include <stdint.h>
 
 #include "common.h"
