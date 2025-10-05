@@ -30,7 +30,7 @@ const size_t alignment = 8;
 // carry can only be generated in the most significant bit. A different view is
 // to see that all these operations toggle the most significant bit, which is
 // set for negative numbers in two’s complement. [Gie16]
-const uint32_t ip_xor = 1 << 31;
+const uint32_t ip_xor = 1u << 31;
 
 typedef struct hm_sm_database {
   size_t list_size;
@@ -132,11 +132,13 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
       return HM_ERROR_BAD_VALUE;
     }
 
-    if (ips[i] & ((1 << (32 - cidr_prefixes[i])) - 1)) {
+    // Validate prefix before using it in shifts to avoid UB for 0.
+    if (cidr_prefixes[i] == 0 || cidr_prefixes[i] > 32) {
       return HM_ERROR_BAD_RANGE;
     }
 
-    if (cidr_prefixes[i] == 0 || cidr_prefixes[i] > 32) {
+    // Check that IP is aligned to the network prefix.
+    if (ips[i] & ((1u << (32 - cidr_prefixes[i])) - 1u)) {
       return HM_ERROR_BAD_RANGE;
     }
 
