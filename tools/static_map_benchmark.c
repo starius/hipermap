@@ -1,19 +1,18 @@
+#include <hs/hs.h>
 #include <inttypes.h>
+#include <ipset/ipset.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include <hs/hs.h>
-#include <ipset/ipset.h>
-
 #include "../static_map.h"
 
 const size_t IP_REGEXP_BUF_LEN =
-    1 + 4 * 3 + 11 + 1; // ^, 3 bytes, one [] range, one zero byte.
+    1 + 4 * 3 + 11 + 1;  // ^, 3 bytes, one [] range, one zero byte.
 
-size_t last_ip_byte_range(char *dst, uint8_t last_ip_byte,
+size_t last_ip_byte_range(char* dst, uint8_t last_ip_byte,
                           uint8_t mask_bits_mod8) {
   uint8_t bitmask = 0xFF00 >> mask_bits_mod8;
   uint8_t first = last_ip_byte & bitmask;
@@ -21,8 +20,8 @@ size_t last_ip_byte_range(char *dst, uint8_t last_ip_byte,
   return sprintf(dst, "[\\x%X-\\x%X]", first, last);
 }
 
-size_t ip_to_regexp(char *dst, int ip_bytes[4], int mask_bits) {
-  char *cursor = dst;
+size_t ip_to_regexp(char* dst, int ip_bytes[4], int mask_bits) {
+  char* cursor = dst;
 
   cursor[0] = '^';
   cursor++;
@@ -53,14 +52,14 @@ uint32_t hash32(uint32_t x) {
 }
 
 struct match_context {
-  int count;    // Set to 0 when initializing.
-  int final_id; // Set to -1 when initializing.
-  int prev_id;  // Set to -1 when initializing.
+  int count;     // Set to 0 when initializing.
+  int final_id;  // Set to -1 when initializing.
+  int prev_id;   // Set to -1 when initializing.
 };
 
 int matcher(unsigned int id, unsigned long long from, unsigned long long to,
-            unsigned int flags, void *context) {
-  struct match_context *c = context;
+            unsigned int flags, void* context) {
+  struct match_context* c = context;
   c->count++;
   if (c->final_id != -1) {
     c->prev_id = c->final_id;
@@ -69,7 +68,7 @@ int matcher(unsigned int id, unsigned long long from, unsigned long long to,
   return 0;
 }
 
-void fill_ip(char *bytes, uint32_t ip) {
+void fill_ip(char* bytes, uint32_t ip) {
   bytes[0] = (ip >> 24) & 0xFF;
   bytes[1] = (ip >> 16) & 0xFF;
   bytes[2] = (ip >> 8) & 0xFF;
@@ -82,24 +81,24 @@ void print_ip(uint32_t ip) {
   printf("%d.%d.%d.%d\n", bytes[0], bytes[1], bytes[2], bytes[3]);
 }
 
-int main(int argc, char *argv[]) {
-  const char *masks_file = argv[1];
-  FILE *fp = fopen(masks_file, "r");
+int main(int argc, char* argv[]) {
+  const char* masks_file = argv[1];
+  FILE* fp = fopen(masks_file, "r");
   if (fp == NULL) {
     printf("Error: could not open file %s.\n", masks_file);
     return 1;
   }
 
-  char **patterns = NULL;
-  uint32_t *ips = NULL;
-  uint8_t *cidr_prefixes = NULL;
-  uint64_t *values = NULL;
+  char** patterns = NULL;
+  uint32_t* ips = NULL;
+  uint8_t* cidr_prefixes = NULL;
+  uint64_t* values = NULL;
   size_t len = 0;
   size_t cap = 0;
 
   ipset_init_library();
 
-  struct ip_set *ip_set = ipset_new();
+  struct ip_set* ip_set = ipset_new();
 
   while (1) {
     int ip_bytes[4];
@@ -111,12 +110,12 @@ int main(int argc, char *argv[]) {
     }
     if (r == 5) {
       // Match.
-      char *pattern = malloc(IP_REGEXP_BUF_LEN); // FIXME memory leak
+      char* pattern = malloc(IP_REGEXP_BUF_LEN);  // FIXME memory leak
       size_t pattern_size = ip_to_regexp(pattern, ip_bytes, mask_bits);
       assert(pattern_size <= IP_REGEXP_BUF_LEN);
       if (len == cap) {
         cap = (cap + 1) * 2;
-        patterns = realloc(patterns, cap * sizeof(char *));
+        patterns = realloc(patterns, cap * sizeof(char*));
         ips = realloc(ips, cap * sizeof(uint32_t));
         cidr_prefixes = realloc(cidr_prefixes, cap * sizeof(uint8_t));
         values = realloc(values, cap * sizeof(uint64_t));
@@ -147,17 +146,17 @@ int main(int argc, char *argv[]) {
 
   fclose(fp);
 
-  unsigned int *ids = malloc(sizeof(int) * len);
+  unsigned int* ids = malloc(sizeof(int) * len);
   for (int i = 0; i < len; i++) {
     ids[i] = i;
   }
 
-  const unsigned int *compile_flags = NULL;
-  const hs_platform_info_t *platform = NULL;
-  hs_database_t *db;
-  hs_compile_error_t *hs_compile_err;
+  const unsigned int* compile_flags = NULL;
+  const hs_platform_info_t* platform = NULL;
+  hs_database_t* db;
+  hs_compile_error_t* hs_compile_err;
   hs_error_t hs_err;
-  hs_err = hs_compile_multi((const char *const *)(patterns), compile_flags, ids,
+  hs_err = hs_compile_multi((const char* const*)(patterns), compile_flags, ids,
                             len, HS_MODE_BLOCK, platform, &db, &hs_compile_err);
   if (hs_err == HS_COMPILER_ERROR) {
     int expr = hs_compile_err->expression;
@@ -176,7 +175,7 @@ int main(int argc, char *argv[]) {
 
   printf("size of hyperscan db is: %d bytes.\n", (int)(db_size));
 
-  hs_scratch_t *scratch = NULL;
+  hs_scratch_t* scratch = NULL;
   hs_err = hs_alloc_scratch(db, &scratch);
   if (hs_err != HS_SUCCESS) {
     printf("hs_alloc_scratch failed: %d.\n", hs_err);
@@ -184,8 +183,8 @@ int main(int argc, char *argv[]) {
   }
 
   size_t hm_db_place_len = hm_sm_db_place_size(len);
-  char *hm_db_place = malloc(hm_db_place_len);
-  hm_sm_database_t *hm_db;
+  char* hm_db_place = malloc(hm_db_place_len);
+  hm_sm_database_t* hm_db;
   hm_error_t hm_err = hm_sm_compile(hm_db_place, hm_db_place_len, &hm_db, ips,
                                     cidr_prefixes, values, len);
   if (hm_err != HM_SUCCESS) {
@@ -299,7 +298,7 @@ int main(int argc, char *argv[]) {
 
   // Serialize the db.
   size_t ser_size = hm_sm_serialized_size(hm_db);
-  char *ser = malloc(ser_size);
+  char* ser = malloc(ser_size);
   hm_err = hm_sm_serialize(ser, ser_size, hm_db);
   if (hm_err != HM_SUCCESS) {
     printf("hm_sm_serialize failed: %d.\n", hm_err);
@@ -314,8 +313,8 @@ int main(int argc, char *argv[]) {
     printf("hm_sm_db_place_size_from_serialized failed: %d.\n", hm_err);
     return 1;
   }
-  char *db_place2 = malloc(db_place_size2);
-  hm_sm_database_t *hm_db2;
+  char* db_place2 = malloc(db_place_size2);
+  hm_sm_database_t* hm_db2;
   hm_err = hm_sm_deserialize(db_place2, db_place_size2, &hm_db2, ser, ser_size);
   if (hm_err != HM_SUCCESS) {
     printf("hm_sm_deserialize failed: %d.\n", hm_err);

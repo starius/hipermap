@@ -1,11 +1,11 @@
+#include "cache.h"
+
 #include <assert.h>
 #include <stdio.h>
 
-#include "cache.h"
-
 #ifdef NDEBUG
-#define debugf(fmt, ...)                                                       \
-  do {                                                                         \
+#define debugf(fmt, ...) \
+  do {                   \
   } while (0)
 #else
 #define debugf printf
@@ -38,7 +38,7 @@ typedef struct hm_cache {
 
   // list_storage is an array used to store elements of both the list and the
   // free list. Each element belongs either to the list or to the free list.
-  hm_cache_element_t *list_storage;
+  hm_cache_element_t* list_storage;
 
   // nodes is the list.
   hm_list_t nodes;
@@ -47,29 +47,29 @@ typedef struct hm_cache {
   hm_list_t free_nodes;
 
   // Hash table. Key is IP. Value is index of previous element.
-  uint32_t *hash_table;
+  uint32_t* hash_table;
 } hm_cache_t;
 
-static inline void cut(hm_cache_element_t *list_storage, hm_list_t *list,
+static inline void cut(hm_cache_element_t* list_storage, hm_list_t* list,
                        uint32_t index) {
-  hm_cache_element_t *e = &(list_storage[index]);
+  hm_cache_element_t* e = &(list_storage[index]);
   uint32_t prev_index = e->prev_index;
   uint32_t next_index = e->next_index;
   e->prev_index = NO_INDEX;
   e->next_index = NO_INDEX;
   if (prev_index != NO_INDEX && next_index != NO_INDEX) {
-    hm_cache_element_t *prev = &(list_storage[prev_index]);
-    hm_cache_element_t *next = &(list_storage[next_index]);
+    hm_cache_element_t* prev = &(list_storage[prev_index]);
+    hm_cache_element_t* next = &(list_storage[next_index]);
     prev->next_index = next_index;
     next->prev_index = prev_index;
   } else if (prev_index != NO_INDEX) {
     // The element is the oldest element.
-    hm_cache_element_t *prev = &(list_storage[prev_index]);
+    hm_cache_element_t* prev = &(list_storage[prev_index]);
     prev->next_index = NO_INDEX;
     list->tail_index = prev_index;
   } else if (next_index != NO_INDEX) {
     // The element is the newest element.
-    hm_cache_element_t *next = &(list_storage[next_index]);
+    hm_cache_element_t* next = &(list_storage[next_index]);
     next->prev_index = NO_INDEX;
     list->head_index = next_index;
   } else {
@@ -79,14 +79,14 @@ static inline void cut(hm_cache_element_t *list_storage, hm_list_t *list,
   }
 }
 
-static inline void set_head(hm_cache_element_t *list_storage, hm_list_t *list,
+static inline void set_head(hm_cache_element_t* list_storage, hm_list_t* list,
                             uint32_t index) {
   if (list->head_index == NO_INDEX) {
     list->head_index = index;
     list->tail_index = index;
   } else {
-    hm_cache_element_t *e = &(list_storage[index]);
-    hm_cache_element_t *head = &(list_storage[list->head_index]);
+    hm_cache_element_t* e = &(list_storage[index]);
+    hm_cache_element_t* head = &(list_storage[list->head_index]);
     e->next_index = list->head_index;
     head->prev_index = index;
     list->head_index = index;
@@ -107,11 +107,11 @@ static inline uint32_t hash32(uint32_t x) {
 }
 
 // table_lookup looks for ip in the table and returns its indes or NO_INDEX.
-static inline uint32_t table_lookup(hm_cache_t *cache, uint32_t ip) {
+static inline uint32_t table_lookup(hm_cache_t* cache, uint32_t ip) {
   // Cache some variables.
   uint32_t mask = cache->mask_for_hash;
-  uint32_t *hash_table = cache->hash_table;
-  hm_cache_element_t *list_storage = cache->list_storage;
+  uint32_t* hash_table = cache->hash_table;
+  hm_cache_element_t* list_storage = cache->list_storage;
 
   // Find the start bucket.
   uint32_t bucket = hash32(ip) & mask;
@@ -135,11 +135,11 @@ static inline uint32_t table_lookup(hm_cache_t *cache, uint32_t ip) {
 
 // table_add assigns the index as a value for the ip. The IP must not exist in
 // the table before the call.
-static inline void table_add(hm_cache_t *cache, uint32_t ip, uint32_t index) {
+static inline void table_add(hm_cache_t* cache, uint32_t ip, uint32_t index) {
   // Cache some variables.
   uint32_t mask = cache->mask_for_hash;
-  uint32_t *hash_table = cache->hash_table;
-  hm_cache_element_t *list_storage = cache->list_storage;
+  uint32_t* hash_table = cache->hash_table;
+  hm_cache_element_t* list_storage = cache->list_storage;
 
   // Make sure the IP is set in the list element.
   assert(list_storage[index].ip == ip);
@@ -170,11 +170,11 @@ static inline void table_add(hm_cache_t *cache, uint32_t ip, uint32_t index) {
 }
 
 // table_delete deletes the ip from the table. The IP must exist.
-static inline void table_delete(hm_cache_t *cache, uint32_t ip) {
+static inline void table_delete(hm_cache_t* cache, uint32_t ip) {
   // Cache some variables.
   uint32_t mask = cache->mask_for_hash;
-  uint32_t *hash_table = cache->hash_table;
-  hm_cache_element_t *list_storage = cache->list_storage;
+  uint32_t* hash_table = cache->hash_table;
+  hm_cache_element_t* list_storage = cache->list_storage;
 
   // Find the start bucket.
   uint32_t i = hash32(ip) & mask;
@@ -282,12 +282,12 @@ static inline bool hm_valid_capacity(unsigned int capacity, int speed) {
   return true;
 }
 
-static inline char *align8(char *addr) {
-  return (char *)(((uintptr_t)(addr) & ~(alignment - 1)) + alignment);
+static inline char* align8(char* addr) {
+  return (char*)(((uintptr_t)(addr) & ~(alignment - 1)) + alignment);
 }
 
 HM_PUBLIC_API
-hm_error_t HM_CDECL hm_cache_place_size(size_t *cache_place_size,
+hm_error_t HM_CDECL hm_cache_place_size(size_t* cache_place_size,
                                         unsigned int capacity, int speed) {
   if (speed < 1 || speed > 5) {
     return HM_ERROR_BAD_SIZE;
@@ -307,12 +307,12 @@ hm_error_t HM_CDECL hm_cache_place_size(size_t *cache_place_size,
 }
 
 HM_PUBLIC_API
-hm_error_t HM_CDECL hm_cache_init(char *cache_place, size_t cache_place_size,
-                                  hm_cache_t **cache_ptr, unsigned int capacity,
+hm_error_t HM_CDECL hm_cache_init(char* cache_place, size_t cache_place_size,
+                                  hm_cache_t** cache_ptr, unsigned int capacity,
                                   int speed) {
   // Align db_place forward, if needed.
   {
-    char *cache_place2 = align8(cache_place);
+    char* cache_place2 = align8(cache_place);
     cache_place_size -= (cache_place2 - cache_place);
     cache_place = cache_place2;
   }
@@ -328,14 +328,14 @@ hm_error_t HM_CDECL hm_cache_init(char *cache_place, size_t cache_place_size,
 
   uint64_t hash_table_capacity = get_hash_table_capacity(capacity, speed);
 
-  hm_cache_t *cache = (hm_cache_t *)(cache_place);
+  hm_cache_t* cache = (hm_cache_t*)(cache_place);
   *cache_ptr = cache;
   cache_place += sizeof(hm_cache_t);
 
-  cache->list_storage = (hm_cache_element_t *)(cache_place);
+  cache->list_storage = (hm_cache_element_t*)(cache_place);
   cache_place += sizeof(hm_cache_element_t) * capacity;
 
-  cache->hash_table = (uint32_t *)(cache_place);
+  cache->hash_table = (uint32_t*)(cache_place);
   cache_place += sizeof(uint32_t) * hash_table_capacity;
 
   // The list is empty.
@@ -364,10 +364,9 @@ hm_error_t HM_CDECL hm_cache_init(char *cache_place, size_t cache_place_size,
 }
 
 HM_PUBLIC_API
-void HM_CDECL hm_cache_add(hm_cache_t *cache, const uint32_t ip,
-                           const uint32_t value, bool *existed, bool *evicted,
-                           uint32_t *evicted_ip, uint32_t *evicted_value) {
-
+void HM_CDECL hm_cache_add(hm_cache_t* cache, const uint32_t ip,
+                           const uint32_t value, bool* existed, bool* evicted,
+                           uint32_t* evicted_ip, uint32_t* evicted_value) {
   // Try to locate the element with this IP in the hash table.
   uint32_t index = table_lookup(cache, ip);
   if (index != NO_INDEX) {
@@ -436,9 +435,8 @@ void HM_CDECL hm_cache_add(hm_cache_t *cache, const uint32_t ip,
 }
 
 HM_PUBLIC_API
-void HM_CDECL hm_cache_remove(hm_cache_t *cache, const uint32_t ip,
-                              bool *existed, uint32_t *existed_value) {
-
+void HM_CDECL hm_cache_remove(hm_cache_t* cache, const uint32_t ip,
+                              bool* existed, uint32_t* existed_value) {
   // Try to locate the element with this IP in the hash table.
   uint32_t index = table_lookup(cache, ip);
   if (index == NO_INDEX) {
@@ -462,8 +460,8 @@ void HM_CDECL hm_cache_remove(hm_cache_t *cache, const uint32_t ip,
 }
 
 HM_PUBLIC_API
-bool HM_CDECL hm_cache_has(hm_cache_t *cache, const uint32_t ip,
-                           uint32_t *value) {
+bool HM_CDECL hm_cache_has(hm_cache_t* cache, const uint32_t ip,
+                           uint32_t* value) {
   // Try to locate the element with this IP in the hash table.
   uint32_t index = table_lookup(cache, ip);
 
@@ -483,8 +481,7 @@ bool HM_CDECL hm_cache_has(hm_cache_t *cache, const uint32_t ip,
 }
 
 HM_PUBLIC_API
-void HM_CDECL hm_cache_dump(hm_cache_t *cache, uint32_t *ips, size_t *ips_len) {
-
+void HM_CDECL hm_cache_dump(hm_cache_t* cache, uint32_t* ips, size_t* ips_len) {
   assert(*ips_len >= cache->capacity);
 
   // Make sure that lists' emptiness is consistent in head_index and tail_index.

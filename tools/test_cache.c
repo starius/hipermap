@@ -6,7 +6,7 @@
 
 #include "../cache.h"
 
-void fill_ip(char *bytes, uint32_t ip) {
+void fill_ip(char* bytes, uint32_t ip) {
   bytes[0] = (ip >> 24) & 0xFF;
   bytes[1] = (ip >> 16) & 0xFF;
   bytes[2] = (ip >> 8) & 0xFF;
@@ -32,7 +32,7 @@ uint32_t hash32(uint32_t x) {
   return x;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   const unsigned int capacity = 128;
 
   int speed = 3;
@@ -44,9 +44,9 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  char *cache_place = malloc(cache_place_size);
+  char* cache_place = malloc(cache_place_size);
 
-  hm_cache_t *cache;
+  hm_cache_t* cache;
   hm_err =
       hm_cache_init(cache_place, cache_place_size, &cache, capacity, speed);
   if (hm_err != HM_SUCCESS) {
@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
   uint32_t ip = 1;
   const int SAMPLE_SIZE = 10000000;
 
-  uint32_t *ips = malloc(sizeof(uint32_t) * capacity);
+  uint32_t* ips = malloc(sizeof(uint32_t) * capacity);
 
   struct timespec benchmark_start, benchmark_stop;
   double benchmark_time;

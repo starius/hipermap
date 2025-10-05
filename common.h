@@ -46,4 +46,4 @@ typedef int hm_error_t;
 } /* extern "C" */
 #endif
 
-#endif // HM_COMMON_H
+#endif  // HM_COMMON_H
