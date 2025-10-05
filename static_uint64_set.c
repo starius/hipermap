@@ -1,6 +1,7 @@
 #include "static_uint64_set.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -206,7 +207,8 @@ hm_error_t HM_CDECL hm_u64_compile(char* db_place, size_t db_place_size,
     qsort(start, items_in_bucket, sizeof(uint64_t), comp_uint64);
   }
 
-  debugf("compile factors: %d %d\n", db->factor1, db->factor2);
+  debugf("compile factors: %" PRIu64 " %" PRIu64 "\n", db->factor1,
+         db->factor2);
   debugf("hash_table: %p\n", db->hash_table);
 
   return HM_SUCCESS;
@@ -336,7 +338,7 @@ hm_error_t HM_CDECL hm_u64_deserialize(char* db_place, size_t db_place_size,
     db->hash_table[i] = hash_table0[i];
   }
 
-  debugf("factors: %d %d\n", db->factor1, db->factor2);
+  debugf("factors: %" PRIu64 " %" PRIu64 "\n", db->factor1, db->factor2);
 
   debugf("hash_table: %p\n", db->hash_table);
 

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -179,8 +180,8 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
   pushToSorted(0, HM_NO_VALUE);
 
   for (hm_input_elem input : inputs) {
-    debugf("\ninput.ip=%x input.cidr_prefix=%d input.value=%d\n", input.ip,
-           input.cidr_prefix, input.value);
+    debugf("\ninput.ip=%x input.cidr_prefix=%d input.value=%" PRIu64 "\n",
+           input.ip, input.cidr_prefix, input.value);
     // The check "ends_stack.back().ip != 0" is needed because a range ending
     // in the end of the whole space (e.g. 128.0.0.0/1) the end is 0 (overflow).
     while (!ends_stack.empty() && ends_stack.back().ip < input.ip &&
@@ -195,8 +196,8 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
         reopened_value = ends_stack.back().value;
       }
       pushToSorted(end_ip, reopened_value);
-      debugf("sorted.push_back reopened ip=%x input.value=%d\n", end_ip,
-             reopened_value);
+      debugf("sorted.push_back reopened ip=%x input.value=%" PRIu64 "\n",
+             end_ip, reopened_value);
     }
 
     // Here it is "if", not "while", because if two zones end at the same point,
@@ -210,7 +211,7 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
     }
 
     pushToSorted(input.ip, input.value);
-    debugf("sorted.push_back elem ip=%x input.value=%d\n", input.ip,
+    debugf("sorted.push_back elem ip=%x input.value=%" PRIu64 "\n", input.ip,
            input.value);
 
     uint32_t end_ip = hm_end_ip_of_zone(input.ip, input.cidr_prefix);
@@ -219,7 +220,8 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
       // There is already some zone ending at the same ip. Since a smaller zone
       // has a priority over a larger zone, we redefine the value in the stack.
       ends_stack.back().value = input.value;
-      debugf("ends_stack.back().value = %d (ends_stack.back().ip=end_ip=%x)\n",
+      debugf("ends_stack.back().value = %" PRIu64
+             " (ends_stack.back().ip=end_ip=%x)\n",
              input.value, ends_stack.back().ip);
     } else {
       if (!ends_stack.empty()) {
@@ -235,7 +237,8 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
           .value = input.value,
       };
       ends_stack.push_back(elem);
-      debugf("ends_stack.push_back ip=%x value=%d\n", end_ip, input.value);
+      debugf("ends_stack.push_back ip=%x value=%" PRIu64 "\n", end_ip,
+             input.value);
     }
   }
 
@@ -251,7 +254,7 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
       reopened_value = ends_stack.back().value;
     }
     pushToSorted(end_ip, reopened_value);
-    debugf("sorted.push_back reopened ip=%x input.value=%d\n", end_ip,
+    debugf("sorted.push_back reopened ip=%x input.value=%" PRIu64 "\n", end_ip,
            reopened_value);
   }
 
@@ -262,7 +265,8 @@ hm_sm_compile(char* db_place, size_t db_place_size, hm_sm_database_t** db_ptr,
     uint64_t value = HM_NO_VALUE;
     // After -1 below it becomes the largest value.
     pushToSorted(ip, value);
-    debugf("sorted.push_back final2 ip=%x input.value=%d\n", ip, value);
+    debugf("sorted.push_back final2 ip=%x input.value=%" PRIu64 "\n", ip,
+           value);
   }
 
   // Shift all IPs to compare as signed integers.

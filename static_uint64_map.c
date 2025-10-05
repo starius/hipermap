@@ -171,23 +171,23 @@ hm_error_t HM_CDECL hm_u64map_compile(char* db_place, size_t db_place_size,
       } else if (db->hash_table[b].key == 0) {
         db->hash_table[b].key = key;
         db->hash_table[b].value = value;
-        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %d\n", key, value,
-               b);
+        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %" PRIu64 "\n", key,
+               value, b);
       } else if (db->hash_table[b + 1].key == 0) {
         db->hash_table[b + 1].key = key;
         db->hash_table[b + 1].value = value;
-        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %d\n", key, value,
-               b + 1);
+        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %" PRIu64 "\n", key,
+               value, b + 1);
       } else if (db->hash_table[b + 2].key == 0) {
         db->hash_table[b + 2].key = key;
         db->hash_table[b + 2].value = value;
-        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %d\n", key, value,
-               b + 2);
+        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %" PRIu64 "\n", key,
+               value, b + 2);
       } else if (db->hash_table[b + 3].key == 0) {
         db->hash_table[b + 3].key = key;
         db->hash_table[b + 3].value = value;
-        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %d\n", key, value,
-               b + 3);
+        debugf("put (0x%" PRIx64 ", 0x%" PRIx64 ") to cell %" PRIu64 "\n", key,
+               value, b + 3);
       } else {
         collision = true;
         debugf("Collision! Rebuilding the table with new hash function.\n");
@@ -232,7 +232,8 @@ hm_error_t HM_CDECL hm_u64map_compile(char* db_place, size_t db_place_size,
     qsort(start, items_in_bucket, sizeof(key_value_t), comp_key_value);
   }
 
-  debugf("compile factors: %d %d\n", db->factor1, db->factor2);
+  debugf("compile factors: %" PRIu64 " %" PRIu64 "\n", db->factor1,
+         db->factor2);
   debugf("hash_table: %p\n", db->hash_table);
 
   return HM_SUCCESS;
@@ -244,11 +245,11 @@ uint64_t HM_CDECL hm_u64map_find(const hm_u64map_database_t* db,
   uint64_t h = hm_u64map_hash64(db, key);
   uint64_t b = h & db->mask_for_hash;
 
-  debugf("hm_u64map_find: key=0x%" PRIx64 ", h=0x%" PRIx64
-         ", b=%d, hash_table[%d]={0x%" PRIx64 ", 0x%" PRIx64
-         "}, hash_table[%d]={0x%" PRIx64 ", 0x%" PRIx64
-         "}, hash_table[%d]={0x%" PRIx64 ", 0x%" PRIx64
-         "}, hash_table[%d]={0x%" PRIx64 ", 0x%" PRIx64 "}\n",
+  debugf("hm_u64map_find: key=0x%" PRIx64 ", h=0x%" PRIx64 ", b=%" PRIu64
+         ", hash_table[%" PRIu64 "]={0x%" PRIx64 ", 0x%" PRIx64
+         "}, hash_table[%" PRIu64 "]={0x%" PRIx64 ", 0x%" PRIx64
+         "}, hash_table[%" PRIu64 "]={0x%" PRIx64 ", 0x%" PRIx64
+         "}, hash_table[%" PRIu64 "]={0x%" PRIx64 ", 0x%" PRIx64 "}\n",
          key, h, b, b, db->hash_table[b].key, db->hash_table[b].value, b + 1,
          db->hash_table[b + 1].key, db->hash_table[b + 1].value, b + 2,
          db->hash_table[b + 2].key, db->hash_table[b + 2].value, b + 3,
@@ -382,7 +383,7 @@ hm_error_t HM_CDECL hm_u64map_deserialize(char* db_place, size_t db_place_size,
     db->hash_table[i] = hash_table0[i];
   }
 
-  debugf("factors: %d %d\n", db->factor1, db->factor2);
+  debugf("factors: %" PRIu64 " %" PRIu64 "\n", db->factor1, db->factor2);
 
   debugf("hash_table: %p\n", db->hash_table);
 
