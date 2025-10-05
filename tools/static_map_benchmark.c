@@ -357,5 +357,21 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  // Free dynamically allocated resources.
   ipset_free(ip_set);
+  if (patterns) {
+    for (size_t i = 0; i < len; i++) {
+      free(patterns[i]);
+    }
+    free(patterns);
+  }
+  free(ips);
+  free(cidr_prefixes);
+  free(values);
+  free(ids);
+  free(hm_db_place);
+  free(ser);
+  free(db_place2);
+
+  return 0;
 }
