@@ -141,7 +141,10 @@ int main(int argc, char* argv[]) {
     // Read the rest of the line, a comment.
     const unsigned MAX_LENGTH = 256;
     char line[MAX_LENGTH];
-    fgets(line, MAX_LENGTH, fp);
+    char* ret = fgets(line, MAX_LENGTH, fp);
+    if (ret == NULL) {
+      break;
+    }
   }
 
   fclose(fp);
