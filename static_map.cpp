@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 extern "C" {
@@ -331,8 +332,8 @@ hm_sm_serialize(char* buffer, size_t buffer_size, const hm_sm_database_t* db) {
     return HM_ERROR_SMALL_PLACE;
   }
 
-  uint64_t* list_size = reinterpret_cast<uint64_t*>(buffer);
-  *list_size = db->list_size;
+  // Write list_size safely regardless of buffer alignment.
+  memcpy(buffer, &db->list_size, sizeof(uint64_t));
   buffer += sizeof(uint64_t);
 
   uint32_t* max_ips = reinterpret_cast<uint32_t*>(buffer);
@@ -341,10 +342,8 @@ hm_sm_serialize(char* buffer, size_t buffer_size, const hm_sm_database_t* db) {
   }
   buffer += sizeof(uint32_t) * db->list_size;
 
-  uint64_t* values = reinterpret_cast<uint64_t*>(buffer);
-  for (int i = 0; i < db->list_size; i++) {
-    values[i] = db->values[i];
-  }
+  // Copy values as bytes to avoid potential 8-byte misalignment of buffer.
+  memcpy(buffer, db->values, sizeof(uint64_t) * db->list_size);
 
   return HM_SUCCESS;
 }
@@ -356,10 +355,11 @@ hm_sm_db_place_size_from_serialized(size_t* db_place_size, const char* buffer,
     return HM_ERROR_SMALL_PLACE;
   }
 
-  const uint64_t* list_size = reinterpret_cast<const uint64_t*>(buffer);
+  uint64_t list_size_val;
+  memcpy(&list_size_val, buffer, sizeof(uint64_t));
   size_t want_buffer_size;
   hm_error_t hm_err =
-      list_size_to_serialized_size(&want_buffer_size, *list_size);
+      list_size_to_serialized_size(&want_buffer_size, list_size_val);
   if (hm_err != HM_SUCCESS) {
     return hm_err;
   }
@@ -367,11 +367,11 @@ hm_sm_db_place_size_from_serialized(size_t* db_place_size, const char* buffer,
     return HM_ERROR_SMALL_PLACE;
   }
 
-  if (*list_size == 0) {
+  if (list_size_val == 0) {
     return HM_ERROR_NO_MASKS;
   }
 
-  *db_place_size = list_size_to_db_place_size(*list_size) + alignment;
+  *db_place_size = list_size_to_db_place_size(list_size_val) + alignment;
 
   return HM_SUCCESS;
 }
@@ -383,10 +383,11 @@ extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_deserialize(
     return HM_ERROR_SMALL_PLACE;
   }
 
-  const uint64_t* list_size = reinterpret_cast<const uint64_t*>(buffer);
+  uint64_t list_size_val;
+  memcpy(&list_size_val, buffer, sizeof(uint64_t));
   size_t want_buffer_size;
   hm_error_t hm_err =
-      list_size_to_serialized_size(&want_buffer_size, *list_size);
+      list_size_to_serialized_size(&want_buffer_size, list_size_val);
   if (hm_err != HM_SUCCESS) {
     return hm_err;
   }
@@ -394,7 +395,7 @@ extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_deserialize(
     return HM_ERROR_SMALL_PLACE;
   }
 
-  if (*list_size == 0) {
+  if (list_size_val == 0) {
     return HM_ERROR_NO_MASKS;
   }
 
@@ -405,37 +406,33 @@ extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_deserialize(
     db_place = db_place2;
   }
 
-  if (db_place_size < list_size_to_db_place_size(*list_size)) {
+  if (db_place_size < list_size_to_db_place_size(list_size_val)) {
     return HM_ERROR_SMALL_PLACE;
   }
 
   // Locate max_ips and values in the db_place.
   hm_sm_database_t* db = reinterpret_cast<hm_sm_database_t*>(db_place);
   *db_ptr = db;
-  db->list_size = *list_size;
+  db->list_size = list_size_val;
   db_place += sizeof(hm_sm_database_t);
 
   db->hashtable = reinterpret_cast<uint32_t*>(db_place);
   db_place += hm_hashtable_size_bytes;
 
   db->max_ips = reinterpret_cast<int32_t*>(db_place);
-  db_place += hm_aligned_size(*list_size) * sizeof(uint32_t);
+  db_place += hm_aligned_size(list_size_val) * sizeof(uint32_t);
 
   db->values = reinterpret_cast<uint64_t*>(db_place);
 
   // Now locate max_ips and values in the buffer.
   buffer += sizeof(uint64_t);
-  const uint32_t* max_ips = reinterpret_cast<const uint32_t*>(buffer);
-  buffer += sizeof(uint32_t) * (*list_size);
-  const uint64_t* values = reinterpret_cast<const uint64_t*>(buffer);
+  const char* max_ips_buf = buffer;
+  buffer += sizeof(uint32_t) * list_size_val;
+  const char* values_buf = buffer;
 
   // Copy the values.
-  for (int i = 0; i < *list_size; i++) {
-    db->max_ips[i] = max_ips[i];
-  }
-  for (int i = 0; i < *list_size; i++) {
-    db->values[i] = values[i];
-  }
+  memcpy(db->max_ips, max_ips_buf, sizeof(uint32_t) * list_size_val);
+  memcpy(db->values, values_buf, sizeof(uint64_t) * list_size_val);
 
   fill_hashtable(db);
 
