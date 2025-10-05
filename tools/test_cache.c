@@ -1,8 +1,35 @@
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+static int clock_gettime(int clk_id, struct timespec* tp) {
+  (void)clk_id;
+  static LARGE_INTEGER freq;
+  static BOOL init = FALSE;
+  LARGE_INTEGER counter;
+  if (!init) {
+    if (!QueryPerformanceFrequency(&freq)) {
+      return -1;
+    }
+    init = TRUE;
+  }
+  if (!QueryPerformanceCounter(&counter)) {
+    return -1;
+  }
+  tp->tv_sec = (time_t)(counter.QuadPart / freq.QuadPart);
+  tp->tv_nsec = (long)((counter.QuadPart % freq.QuadPart) * 1000000000ULL /
+                       freq.QuadPart);
+  return 0;
+}
+#endif
 
 #include "../cache.h"
 
