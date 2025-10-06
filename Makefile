@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
 .PHONY: build test fmt fmt-c fmt-go fmt-nix \
-	nix nix-musl nix-glibc nix-debug nix-sanitizers nix-avx512 nix-arm64 nix-mingw64
+	nix nix-musl nix-glibc nix-debug nix-sanitizers nix-avx512 nix-arm64 nix-mingw64 nix-nosimd
 
 # Configurable locations
 BUILD_DIR ?= build
@@ -35,6 +35,9 @@ build:
 	cmake --install $(BUILD_DIR) --prefix $(PREFIX)
 	@echo "==> Build Go packages"
 	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go build ./...
+	@echo "==> Build Go tools"
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" \
+		go build -trimpath -buildvcs=false -o $(PREFIX)/bin/verify ./gostaticdomainset/cmd/verify
 	@echo "Build complete. Binaries in $(PREFIX)/bin, install tree at $(PREFIX)."
 
 # Run all Go tests in all subpackages
@@ -42,12 +45,17 @@ test:
 	@echo "==> Running Go tests"
 	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test ./... $(GO_TESTFLAGS)
 
+pure-test:
+	@echo "==> Running tests of pure Go static domain set implementation"
+	CGO_ENABLED=0 go test ./gostaticdomainset -tags use_pure_gostaticdomainset $(GO_TESTFLAGS)
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test ./gostaticdomainset -run TestPureCGOSerializationCompatibility $(GO_TESTFLAGS)
+
 # Format everything: C/C++ sources, Go code, and flake.nix.
 fmt: fmt-c fmt-go fmt-nix
 
 # Format C/C++ sources and headers.
 fmt-c:
-	clang-format -i *.h *.c *.cpp tools/*.c
+	clang-format -i *.h *.c *.cpp tools/*.c tools/*.cpp
 
 # Format all Go packages in this module.
 fmt-go:
@@ -91,5 +99,8 @@ nix-arm64:
 nix-mingw64:
 	$(call nix_build,mingw64,mingw64)
 
+nix-nosimd:
+	$(call nix_build,nosimd,nosimd)
+
 # Meta target: build all nix outputs, each in its own out-XXX symlink
-nix: nix-musl nix-glibc nix-debug nix-sanitizers nix-avx512 nix-arm64 nix-mingw64
+nix: nix-musl nix-glibc nix-debug nix-sanitizers nix-avx512 nix-arm64 nix-mingw64 nix-nosimd

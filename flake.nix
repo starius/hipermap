@@ -1,5 +1,5 @@
 {
-  description = "Hipermap: C/C++ lib + bench tool";
+  description = "Hipermap: C/C++ lib + bench tool, Go verify tool";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   inputs.flake-utils.url = "github:numtide/flake-utils";
@@ -60,6 +60,8 @@
             buildType ? "Release",
             enableSanitizers ? false,
             enableAvx512 ? false,
+            disableSimd ? false,
+            domainBenchEnableHyperscan ? true,
             enableStaticMapBenchmark ? false,
             staticLink ? false,
           }:
@@ -68,6 +70,8 @@
               "-DCMAKE_BUILD_TYPE=${buildType}"
               "-DHIPERMAP_ENABLE_SANITIZERS=${if enableSanitizers then "ON" else "OFF"}"
               "-DHIPERMAP_ENABLE_AVX512=${if enableAvx512 then "ON" else "OFF"}"
+              "-DHIPERMAP_DOMAIN_BENCH_ENABLE_HYPERSCAN=${if domainBenchEnableHyperscan then "ON" else "OFF"}"
+              "-DHIPERMAP_DISABLE_SIMD=${if disableSimd then "ON" else "OFF"}"
               "-DHIPERMAP_ENABLE_STATIC_MAP_BENCHMARK=${if enableStaticMapBenchmark then "ON" else "OFF"}"
             ]
             ++ (
@@ -83,7 +87,7 @@
             );
             cmakeFlagsStr = pkgs.lib.escapeShellArgs cmakeFlagsList;
             hsInputs =
-              if enableStaticMapBenchmark then
+              if enableStaticMapBenchmark || domainBenchEnableHyperscan then
                 [
                   (pkgsX.hyperscan.override { withStatic = true; })
                   pkgsX.hyperscan.dev
@@ -119,7 +123,7 @@
             '';
             buildPhase = ''
               runHook preBuild
-              cmake --build build --target hipermap test_cache${extraTargets}
+              cmake --build build --target hipermap bench_domains bench_lower test_cache${extraTargets}
               runHook postBuild
             '';
             installPhase = (
@@ -134,9 +138,9 @@
                     cp -f build/CMakeFiles/hipermap.dir/../libhipermap.a "$out/lib/" 2>/dev/null || true
                   fi
                   # Headers
-                  cp -f common.h static_map.h cache.h static_uint64_set.h static_uint64_map.h "$out/include/hipermap/"
+                  cp -f common.h static_map.h cache.h static_uint64_set.h static_uint64_map.h static_domain_set.h "$out/include/hipermap/"
                   # Executables
-                  for exe in static_map_benchmark test_cache; do
+                  for exe in bench_domains bench_lower static_map_benchmark test_cache; do
                     name="$exe"
                     src=""
                     if [ -f "build/''${name}.exe" ]; then
@@ -160,7 +164,7 @@
             );
           };
 
-        # Common Go module builder with cgo and external linker.
+        # Common Go module builder (verify or tests) with cgo and external linker
         mkGoModuleCommon =
           {
             pkgsX,
@@ -179,7 +183,7 @@
             version = "1.0";
             src = self;
             modRoot = ".";
-            vendorHash = "sha256-jz6DzSTDoANq3XzyepC3fvFAEfrztp0/1DbTnTh3ZGw";
+            vendorHash = "sha256-sWZeLYTQ22aRlBBrpGlMzvJ+ySgr+tVBQT7bmHIPHtE=";
             nativeBuildInputs = [ pkgsX.pkg-config ];
             buildInputs = [
               stdenvX.cc.cc
@@ -207,6 +211,18 @@
             ];
           };
 
+        # Go verify binary
+        mkGoVerify =
+          args:
+          mkGoModuleCommon (
+            args
+            // {
+              pname = "verify";
+              subPackages = [ "gostaticdomainset/cmd/verify" ];
+              buildTestBinaries = false;
+            }
+          );
+
         # Go test binaries for all packages
         mkGoTests =
           args:
@@ -232,6 +248,7 @@
               hip = mkCMake {
                 pkgsX = pkgsMusl;
                 stdenvX = pkgsMusl.stdenv;
+                domainBenchEnableHyperscan = false;
                 enableStaticMapBenchmark = false;
                 staticLink = true;
               };
@@ -240,6 +257,12 @@
               name = "hipermap-all-musl";
               paths = [
                 hip
+                (mkGoVerify {
+                  pkgsX = pkgsMusl;
+                  stdenvX = pkgsMusl.stdenv;
+                  hipermapDrv = hip;
+                  staticLink = true;
+                })
                 (mkGoTests {
                   pkgsX = pkgsMusl;
                   stdenvX = pkgsMusl.stdenv;
@@ -249,12 +272,13 @@
               ];
             };
 
-          # glibc bundle: CMake build.
+          # glibc bundle: CMake build (Hyperscan ON) + Go verify (no Hyperscan dependency)
           glibc =
             let
               hip = mkCMake {
                 pkgsX = pkgs;
                 stdenvX = pkgs.stdenv;
+                domainBenchEnableHyperscan = true;
                 enableStaticMapBenchmark = true;
                 staticLink = false;
               };
@@ -263,6 +287,12 @@
               name = "hipermap-glibc";
               paths = [
                 hip
+                (mkGoVerify {
+                  pkgsX = pkgs;
+                  stdenvX = pkgs.stdenv;
+                  hipermapDrv = hip;
+                  staticLink = false;
+                })
                 (mkGoTests {
                   pkgsX = pkgs;
                   stdenvX = pkgs.stdenv;
@@ -279,6 +309,7 @@
                 pkgsX = pkgs;
                 stdenvX = pkgs.stdenv;
                 buildType = "Debug";
+                domainBenchEnableHyperscan = true;
                 enableStaticMapBenchmark = true;
               };
             in
@@ -286,6 +317,11 @@
               name = "hipermap-debug";
               paths = [
                 hip
+                (mkGoVerify {
+                  pkgsX = pkgs;
+                  stdenvX = pkgs.stdenv;
+                  hipermapDrv = hip;
+                })
                 (mkGoTests {
                   pkgsX = pkgs;
                   stdenvX = pkgs.stdenv;
@@ -300,6 +336,7 @@
                 pkgsX = pkgs;
                 stdenvX = pkgs.stdenv;
                 enableSanitizers = true;
+                domainBenchEnableHyperscan = true;
                 enableStaticMapBenchmark = true;
               };
             in
@@ -307,6 +344,12 @@
               name = "hipermap-sanitizers";
               paths = [
                 hip
+                (mkGoVerify {
+                  pkgsX = pkgs;
+                  stdenvX = pkgs.stdenv;
+                  hipermapDrv = hip;
+                  enableSanitizers = true;
+                })
                 (mkGoTests {
                   pkgsX = pkgs;
                   stdenvX = pkgs.stdenv;
@@ -322,6 +365,7 @@
                 pkgsX = pkgs;
                 stdenvX = pkgs.stdenv;
                 enableAvx512 = true;
+                domainBenchEnableHyperscan = true;
                 enableStaticMapBenchmark = true;
               };
             in
@@ -329,10 +373,45 @@
               name = "hipermap-avx512";
               paths = [
                 hip
+                (mkGoVerify {
+                  pkgsX = pkgs;
+                  stdenvX = pkgs.stdenv;
+                  hipermapDrv = hip;
+                })
                 (mkGoTests {
                   pkgsX = pkgs;
                   stdenvX = pkgs.stdenv;
                   hipermapDrv = hip;
+                })
+              ];
+            };
+
+          nosimd =
+            let
+              hip = mkCMake {
+                pkgsX = pkgs;
+                stdenvX = pkgs.stdenv;
+                enableSanitizers = true;
+                domainBenchEnableHyperscan = true;
+                enableStaticMapBenchmark = true;
+                disableSimd = true;
+              };
+            in
+            pkgs.symlinkJoin {
+              name = "hipermap-nosimd";
+              paths = [
+                hip
+                (mkGoVerify {
+                  pkgsX = pkgs;
+                  stdenvX = pkgs.stdenv;
+                  hipermapDrv = hip;
+                  enableSanitizers = true;
+                })
+                (mkGoTests {
+                  pkgsX = pkgs;
+                  stdenvX = pkgs.stdenv;
+                  hipermapDrv = hip;
+                  enableSanitizers = true;
                 })
               ];
             };
@@ -345,6 +424,7 @@
               hip = mkCMake {
                 pkgsX = cross;
                 stdenvX = cross.stdenv;
+                domainBenchEnableHyperscan = false;
                 enableStaticMapBenchmark = false;
                 staticLink = true;
               };
@@ -361,6 +441,7 @@
               hip = mkCMake {
                 pkgsX = cross;
                 stdenvX = cross.stdenv;
+                domainBenchEnableHyperscan = false;
                 enableStaticMapBenchmark = false;
                 staticLink = true;
               };

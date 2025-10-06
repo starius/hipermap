@@ -26,6 +26,7 @@
 *.exe
 *.out
 *.app
+gostaticdomainset/cmd/verify/verify
 *.test
 Testing
 

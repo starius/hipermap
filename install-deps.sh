@@ -8,6 +8,6 @@ cd ipset
 sed 's/add_definitions(-Wall -Werror)//' -i CMakeLists.txt
 mkdir build
 cd build
-cmake -DCMAKE_INSTALL_PREFIX=/usr ..
+cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_C_FLAGS=-pthread ..
 make
 sudo make install

@@ -42,6 +42,19 @@ typedef int hm_error_t;
 // HM_ERROR_BAD_SIZE is returned if size value is incorrect.
 #define HM_ERROR_BAD_SIZE (6)
 
+// HM_ERROR_TOO_MANY_POPULAR_DOMAINS is returned by static domain set if there
+// are too many popular domains in the list.
+#define HM_ERROR_TOO_MANY_POPULAR_DOMAINS (7)
+
+// HM_ERROR_FAILED_TO_CALIBRATE is returned by static domain set if failed to
+// calibrate the hash table after all the iterations.
+#define HM_ERROR_FAILED_TO_CALIBRATE (8)
+
+// HM_ERROR_TOP_LEVEL_DOMAIN is returned by static domain set compile when
+// an input pattern is a top-level domain (contains no dot). Such patterns
+// are not supported by the fast lookup path.
+#define HM_ERROR_TOP_LEVEL_DOMAIN (9)
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
