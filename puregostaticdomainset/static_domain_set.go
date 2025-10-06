@@ -33,15 +33,14 @@ type domainsTableRecord struct {
 
 // StaticDomainSet is a pure Go implementation (non-SIMD path).
 type StaticDomainSet struct {
-	buckets  uint32
-	seed     uint32
 	fastModM uint64
 
-	table    []domainsTableRecord
-	popular  []domainsTableRecord
-	popCount uint32
+	table   []domainsTableRecord
+	popular []domainsTableRecord
+	blob    []byte // concatenated, 16-byte aligned strings + 0x00 terminators + tail pad
 
-	blob []byte // concatenated, 16-byte aligned strings + 0x00 terminators + tail pad
+	seed     uint32
+	popCount uint32
 }
 
 var (
@@ -97,7 +96,7 @@ func Compile(domains []string) (*StaticDomainSet, error) {
 
 // Find returns whether the domain (case-insensitive) is present.
 func (s *StaticDomainSet) Find(domain string) (bool, error) {
-	if s == nil || s.buckets == 0 {
+	if s == nil || len(s.table) == 0 {
 		return false, nil
 	}
 	// Trim trailing dots.
@@ -138,7 +137,7 @@ func (s *StaticDomainSet) Find(domain string) (bool, error) {
 	}
 
 	// Find bucket via fastmod: (uint32)suffixHash % buckets.
-	b := fastmodU32(uint32(suffixHash), s.fastModM, s.buckets)
+	b := fastmodU32(uint32(suffixHash), s.fastModM, uint32(len(s.table)))
 	rec := &s.table[b]
 
 	// Scan within bucket upto maxScans, growing suffix leftwards each time.
@@ -178,7 +177,7 @@ func (s *StaticDomainSet) Seed() uint32 {
 // Serialize emits a buffer compatible with gostaticdomainset/C:
 // [4-byte magic] [64-byte header] [popular records] [table records] [blob]
 func (s *StaticDomainSet) Serialize() ([]byte, error) {
-	if s == nil || s.buckets == 0 {
+	if s == nil || len(s.table) == 0 {
 		return nil, fmt.Errorf("empty set")
 	}
 	popBytes := len(s.popular) * recordBytes
@@ -200,7 +199,7 @@ func (s *StaticDomainSet) Serialize() ([]byte, error) {
 	// 48: domains_blob_size (size_t/u64)
 	off := 4
 	binary.LittleEndian.PutUint64(buf[off+0:], s.fastModM)
-	binary.LittleEndian.PutUint32(buf[off+8:], s.buckets)
+	binary.LittleEndian.PutUint32(buf[off+8:], uint32(len(s.table)))
 	binary.LittleEndian.PutUint32(buf[off+12:], s.seed)
 	// ptrs left as zero
 	binary.LittleEndian.PutUint32(buf[off+32:], uint32(len(s.popular)))
@@ -250,7 +249,6 @@ func FromSerialized(buffer []byte) (*StaticDomainSet, error) {
 	}
 
 	s := &StaticDomainSet{
-		buckets:  buckets,
 		seed:     seed,
 		fastModM: fastM,
 		popCount: popCount,
@@ -268,19 +266,22 @@ func FromSerialized(buffer []byte) (*StaticDomainSet, error) {
 	}
 	s.blob = make([]byte, blobBytes)
 	copy(s.blob, buffer[at:at+int(blobBytes)])
+	if uint32(s.popularSuffixCount()) != popCount {
+		return nil, fmt.Errorf("popular count mismatch")
+	}
 	return s, nil
 }
 
 // String returns a summary similar to the cgo version.
 func (s *StaticDomainSet) String() string {
-	if s == nil || s.buckets == 0 {
+	if s == nil || len(s.table) == 0 {
 		return "StaticDomainSet{empty}"
 	}
 	usedTotal := 0
 	for i := range s.table {
 		usedTotal += int(s.table[i].used)
 	}
-	capCells := int(s.buckets) * dSlots
+	capCells := len(s.table) * dSlots
 	var fillPct float64
 	if capCells > 0 {
 		fillPct = float64(usedTotal) * 100.0 / float64(capCells)
@@ -297,7 +298,7 @@ func (s *StaticDomainSet) String() string {
 
 // Allocated returns the total size of the materialized database in bytes.
 func (s *StaticDomainSet) Allocated() int {
-	if s == nil || s.buckets == 0 {
+	if s == nil || len(s.table) == 0 {
 		return 0
 	}
 	header := headerBytes
@@ -305,6 +306,17 @@ func (s *StaticDomainSet) Allocated() int {
 	table := len(s.table) * recordBytes
 	blob := len(s.blob)
 	return 4 + header + popular + table + blob
+}
+
+func (s *StaticDomainSet) popularSuffixCount() int {
+	if s == nil {
+		return 0
+	}
+	total := 0
+	for i := range s.popular {
+		total += int(s.popular[i].used)
+	}
+	return total
 }
 
 // -------- Helpers and builders --------
@@ -637,10 +649,7 @@ func stringInSlice(s string, arr []string) bool {
 }
 
 func (s *StaticDomainSet) buildFromPreview(cal calibrationResult) error {
-	s.buckets = uint32(len(cal.buckets))
 	s.seed = cal.seed
-	s.fastModM = computeM(s.buckets)
-	s.popCount = uint32(len(cal.popular))
 	// Sizes for blob: popular first, then buckets; each string rounded to 16; plus tail pad.
 	blobSize := 0
 	for _, sv := range cal.popular {
@@ -656,6 +665,8 @@ func (s *StaticDomainSet) buildFromPreview(cal calibrationResult) error {
 	s.blob = make([]byte, blobSize)
 	s.popular = make([]domainsTableRecord, (len(cal.popular)+dSlots-1)/dSlots)
 	s.table = make([]domainsTableRecord, len(cal.buckets))
+	s.fastModM = computeM(uint32(len(s.table)))
+	s.popCount = uint32(len(cal.popular))
 
 	// Build popular table
 	cur := 0
