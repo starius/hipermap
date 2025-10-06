@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 
-.PHONY: build test fmt fmt-c fmt-go
+.PHONY: build test fmt fmt-c fmt-go fmt-nix \
+	nix nix-musl nix-glibc nix-debug nix-sanitizers nix-avx512 nix-arm64 nix-mingw64
 
 # Configurable locations
 BUILD_DIR ?= build
@@ -24,7 +25,7 @@ CGO_CFLAGS += -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 CGO_LDFLAGS += -fsanitize=address -fsanitize=undefined -ldl -lubsan -lm
 endif
 
-# Build everything: CMake library/tools + Go packages/tools
+# Build everything without Nix: CMake library/tools + Go packages/tools
 build:
 	@echo "==> Configure CMake in $(BUILD_DIR)"
 	cmake -B $(BUILD_DIR) -S . $(CMAKE_FLAGS)
@@ -41,8 +42,8 @@ test:
 	@echo "==> Running Go tests"
 	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test ./... $(GO_TESTFLAGS)
 
-# Format everything: C/C++ sources and Go code.
-fmt: fmt-c fmt-go
+# Format everything: C/C++ sources, Go code, and flake.nix.
+fmt: fmt-c fmt-go fmt-nix
 
 # Format C/C++ sources and headers.
 fmt-c:
@@ -51,3 +52,44 @@ fmt-c:
 # Format all Go packages in this module.
 fmt-go:
 	go fmt ./...
+
+# Format flake.nix with nixfmt (RFC style).
+fmt-nix:
+	nixfmt flake.nix
+
+# -----------------------
+# Nix flake convenience targets
+# -----------------------
+
+NIX ?= nix
+NIX_ARGS ?= -L
+
+define nix_build
+	@echo "==> nix build .#$(1) -> out-$(2)"
+	$(NIX) build $(NIX_ARGS) .#$(1) -o out-$(2)
+endef
+
+nix-musl:
+	$(call nix_build,musl,musl)
+
+nix-glibc:
+	$(call nix_build,glibc,glibc)
+
+nix-debug:
+	$(call nix_build,debug,debug)
+
+nix-sanitizers:
+	$(call nix_build,sanitizers,sanitizers)
+
+nix-avx512:
+	$(call nix_build,avx512,avx512)
+
+nix-arm64:
+	$(call nix_build,arm64,arm64)
+
+
+nix-mingw64:
+	$(call nix_build,mingw64,mingw64)
+
+# Meta target: build all nix outputs, each in its own out-XXX symlink
+nix: nix-musl nix-glibc nix-debug nix-sanitizers nix-avx512 nix-arm64 nix-mingw64

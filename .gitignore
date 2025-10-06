@@ -26,9 +26,15 @@
 *.exe
 *.out
 *.app
+*.test
+Testing
 
 ipset
 build
 drop.txt
 
 *.swp
+
+# Nix artifacts.
+out-*
+result
