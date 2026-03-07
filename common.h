@@ -50,9 +50,10 @@ typedef int hm_error_t;
 // calibrate the hash table after all the iterations.
 #define HM_ERROR_FAILED_TO_CALIBRATE (8)
 
-// HM_ERROR_TOP_LEVEL_DOMAIN is returned by static domain set compile when
-// an input pattern is a top-level domain (contains no dot). Such patterns
-// are not supported by the fast lookup path.
+// Deprecated: HM_ERROR_TOP_LEVEL_DOMAIN was historically returned by static
+// domain set compile when an input pattern was a top-level domain (contains no
+// dot). Top-level domains are supported in v2 serialized format and newer
+// builds.
 #define HM_ERROR_TOP_LEVEL_DOMAIN (9)
 
 #ifdef __cplusplus

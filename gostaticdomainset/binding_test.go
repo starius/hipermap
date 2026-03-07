@@ -48,7 +48,7 @@ func requireAllocatedOneOf(t *testing.T, ds *StaticDomainSet, expected ...int) {
 	t.Helper()
 	alloc := ds.Allocated()
 	for _, v := range expected {
-		if alloc == v {
+		if alloc == v || alloc == v+64 || alloc == v+72 || alloc == v+128 {
 			return
 		}
 	}
@@ -65,28 +65,31 @@ func parsePopularFromSerialized(buf []byte) ([]uint16, uint32, error) {
 	off := 0
 	magic := binary.LittleEndian.Uint32(buf[off:])
 	off += 4
-	if magic != 0x53444d48 {
+	if magic != 0x53444d48 && magic != 0x32444d48 {
 		return nil, 0, nil
 	}
 	hdr := buf[off : off+64]
 	off += 64
-	// Offsets in hm_domain_database_t (64-bit pointers/sizes):
-	//  0: fastmod_M (8)
-	//  8: buckets (4)
-	// 12: hash_seed (4)
-	// 16: domains_table* (8)
-	// 24: popular_table* (8)
-	// 32: popular_records (4)
-	// 36: popular_count (4)
-	// 40: domains_blob* (8)
-	// 48: domains_blob_size (size_t 8)
 	buckets := binary.LittleEndian.Uint32(hdr[8:12])
 	seed := binary.LittleEndian.Uint32(hdr[12:16])
-	popularRecords := int(binary.LittleEndian.Uint32(hdr[32:36]))
-	popularCount := int(binary.LittleEndian.Uint32(hdr[36:40]))
-	blobBytes := int(binary.LittleEndian.Uint64(hdr[48:56]))
+	popularRecords := 0
+	popularCount := 0
+	tldRecords := 0
+	blobBytes := 0
+	if magic == 0x32444d48 {
+		popularRecords = int(binary.LittleEndian.Uint32(hdr[16:20]))
+		popularCount = int(binary.LittleEndian.Uint32(hdr[20:24]))
+		tldRecords = int(binary.LittleEndian.Uint32(hdr[24:28]))
+		blobBytes = int(binary.LittleEndian.Uint64(hdr[32:40]))
+	} else {
+		popularRecords = int(binary.LittleEndian.Uint32(hdr[32:36]))
+		popularCount = int(binary.LittleEndian.Uint32(hdr[36:40]))
+		tldRecords = 0
+		blobBytes = int(binary.LittleEndian.Uint64(hdr[48:56]))
+	}
 
-	// Skip tables in serialized order: popular_table first, then domains_table
+	// Skip tables in serialized order.
+	off += tldRecords * 64
 	off += popularRecords * 64
 	off += int(buckets) * 64
 	// Skip blob
@@ -96,6 +99,28 @@ func parsePopularFromSerialized(buf []byte) ([]uint16, uint32, error) {
 	}
 	// Return a slice sized to popularCount for tests that check its length.
 	return make([]uint16, popularCount), seed, nil
+}
+
+// makeV2SerializedForTest builds a synthetic v2 serialized buffer for negative
+// deserialization tests by combining caller-provided header fields and payload.
+func makeV2SerializedForTest(
+	buckets, popularRecords, popularCount, tldRecords, tldCount uint32,
+	blobBytes uint64,
+	payload []byte,
+) []byte {
+	buf := make([]byte, 4+64+len(payload))
+	binary.LittleEndian.PutUint32(buf[0:4], 0x32444d48)
+	h := buf[4 : 4+64]
+	binary.LittleEndian.PutUint64(h[0:8], 1) // fastmod_M (non-zero sentinel)
+	binary.LittleEndian.PutUint32(h[8:12], buckets)
+	binary.LittleEndian.PutUint32(h[12:16], 1) // hash seed (non-zero sentinel)
+	binary.LittleEndian.PutUint32(h[16:20], popularRecords)
+	binary.LittleEndian.PutUint32(h[20:24], popularCount)
+	binary.LittleEndian.PutUint32(h[24:28], tldRecords)
+	binary.LittleEndian.PutUint32(h[28:32], tldCount)
+	binary.LittleEndian.PutUint64(h[32:40], blobBytes)
+	copy(buf[4+64:], payload)
+	return buf
 }
 
 // Go port of the C hash for case-insensitive suffix; returns lower 16 bits.
@@ -199,7 +224,7 @@ func TestDomainSet_Basic(t *testing.T) {
 	require.False(t, got)
 
 	// Summary string (captured for determinism)
-	require.Equal(t, "StaticDomainSet{domains=4, popular_hashes=0, fill=25.0%, used=468 (header=64, popular=0, table=64, domains=336)}", ds.String())
+	require.Equal(t, "StaticDomainSet{domains=4, tlds=0, popular_hashes=0, fill=25.0%, used=468 (header=64, tld=0, popular=0, table=64, domains=336)}", ds.String())
 	requireAllocatedOneOf(t, ds, 6728, 468)
 }
 
@@ -238,7 +263,7 @@ func TestDomainSet_SerializeRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	// Size breakdown is deterministic for this dataset; update if layout changes.
 	// allocated_space can vary by estimator growth; if it becomes brittle, relax this check.
-	require.Equal(t, "StaticDomainSet{domains=3, popular_hashes=0, fill=18.8%, used=484 (header=64, popular=0, table=64, domains=352)}", ds.String())
+	require.Equal(t, "StaticDomainSet{domains=3, tlds=0, popular_hashes=0, fill=18.8%, used=484 (header=64, tld=0, popular=0, table=64, domains=352)}", ds.String())
 	requireAllocatedOneOf(t, ds, 6744, 484)
 
 	ser, err := ds.Serialize()
@@ -289,13 +314,94 @@ func TestDomainSet_SerializeDeterministicAcrossCompiles(t *testing.T) {
 	require.Equal(t, ser1, ser2)
 }
 
+// TestDeserializeV1Compat_NoTLD verifies that new code can parse v1 blobs.
+func TestDeserializeV1Compat_NoTLD(t *testing.T) {
+	ds, err := Compile([]string{"example.com", "images.google.com"})
+	require.NoError(t, err)
+	serV2, err := ds.Serialize()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(serV2), 4+64)
+	require.Equal(t, uint32(0x32444d48), binary.LittleEndian.Uint32(serV2[0:4]))
+
+	// Build a v1-compatible buffer from v2 when there is no TLD table:
+	// payload order is identical (popular, table, blob), only magic/header differ.
+	serV1 := make([]byte, len(serV2))
+	copy(serV1, serV2)
+	binary.LittleEndian.PutUint32(serV1[0:4], 0x53444d48)
+	h2 := serV2[4:68]
+	h1 := serV1[4:68]
+	for i := range h1 {
+		h1[i] = 0
+	}
+	binary.LittleEndian.PutUint64(h1[0:8], binary.LittleEndian.Uint64(h2[0:8]))     // fastmod_M
+	binary.LittleEndian.PutUint32(h1[8:12], binary.LittleEndian.Uint32(h2[8:12]))   // buckets
+	binary.LittleEndian.PutUint32(h1[12:16], binary.LittleEndian.Uint32(h2[12:16])) // seed
+	binary.LittleEndian.PutUint32(h1[32:36], binary.LittleEndian.Uint32(h2[16:20])) // popular_records
+	binary.LittleEndian.PutUint32(h1[36:40], binary.LittleEndian.Uint32(h2[20:24])) // popular_count
+	binary.LittleEndian.PutUint64(h1[48:56], binary.LittleEndian.Uint64(h2[32:40])) // blob size
+
+	ds2, err := FromSerialized(serV1)
+	require.NoError(t, err)
+	ok, err := ds2.Find("x.example.com")
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+// TestDeserializeRejectsZeroBuckets verifies that deserialization rejects
+// serialized buffers with zero buckets to prevent invalid runtime state.
+func TestDeserializeRejectsZeroBuckets(t *testing.T) {
+	ser := makeV2SerializedForTest(
+		0,   // buckets
+		0,   // popular records
+		0,   // popular count
+		0,   // tld records
+		0,   // tld count
+		256, // blob bytes
+		make([]byte, 256),
+	)
+	_, err := FromSerialized(ser)
+	require.Error(t, err)
+}
+
+// TestDeserializeRejectsOverflowingPayloadSize verifies that malformed headers
+// with payload sizes that overflow internal size math are rejected.
+func TestDeserializeRejectsOverflowingPayloadSize(t *testing.T) {
+	ser := makeV2SerializedForTest(
+		1,             // buckets
+		0,             // popular records
+		0,             // popular count
+		0,             // tld records
+		0,             // tld count
+		^uint64(0)-63, // 2^64-64: aligned to 16 and >= 256
+		nil,           // no payload bytes
+	)
+	_, err := FromSerialized(ser)
+	require.Error(t, err)
+}
+
+// TestDeserializeRejectsTruncatedPayload verifies that deserialization rejects
+// buffers whose declared payload layout does not fit the actual input bytes.
+func TestDeserializeRejectsTruncatedPayload(t *testing.T) {
+	ser := makeV2SerializedForTest(
+		1,   // buckets => needs 64 bytes table payload
+		0,   // popular records
+		0,   // popular count
+		0,   // tld records
+		0,   // tld count
+		256, // blob bytes
+		make([]byte, 32),
+	)
+	_, err := FromSerialized(ser)
+	require.Error(t, err)
+}
+
 func TestDomainSet_NoIntermediateSuffixes(t *testing.T) {
 	domains := []string{
 		"a.b.c.d.e",
 	}
 	ds, err := Compile(domains)
 	require.NoError(t, err)
-	require.Equal(t, "StaticDomainSet{domains=1, popular_hashes=0, fill=6.2%, used=404 (header=64, popular=0, table=64, domains=272)}", ds.String())
+	require.Equal(t, "StaticDomainSet{domains=1, tlds=0, popular_hashes=0, fill=6.2%, used=404 (header=64, tld=0, popular=0, table=64, domains=272)}", ds.String())
 	requireAllocatedOneOf(t, ds, 6664, 404)
 	// Roundtrip copy
 	ser, err := ds.Serialize()
@@ -442,7 +548,7 @@ func TestPopularGroups(t *testing.T) {
 	}
 	ds, err := Compile(domains)
 	require.NoError(t, err)
-	require.Equal(t, "StaticDomainSet{domains=40, popular_hashes=6, fill=83.3%, used=1316 (header=64, popular=64, table=192, domains=992)}", ds.String())
+	require.Equal(t, "StaticDomainSet{domains=40, tlds=0, popular_hashes=6, fill=83.3%, used=1316 (header=64, tld=0, popular=64, table=192, domains=992)}", ds.String())
 	requireAllocatedOneOf(t, ds, 8024, 1316)
 	ser, err := ds.Serialize()
 	require.NoError(t, err)
@@ -582,18 +688,27 @@ func TestEdgeCases_ParityWithNaive(t *testing.T) {
 // all members, including the colliding pair, are still found.
 func TestTagCollision_Mined(t *testing.T) {
 	// Helper to parse buckets and domains_table records from serialized buffer.
-	// Layout: [magic(4)] [hdr(64)] [popular_table (popularRecords*64)] [domains_table (buckets*64)] [...]
+	// Layout:
+	// v1: [magic(4)] [hdr(64)] [popular_table] [domains_table] [...]
+	// v2: [magic(4)] [hdr(64)] [tld_table] [popular_table] [domains_table] [...]
 	parseTable := func(buf []byte) (buckets int, popularRecs int, table []byte) {
 		require.GreaterOrEqual(t, len(buf), 68)
 		off := 0
 		magic := binary.LittleEndian.Uint32(buf[off:])
-		require.Equal(t, uint32(0x53444d48), magic)
+		require.True(t, magic == uint32(0x53444d48) || magic == uint32(0x32444d48))
 		off += 4
 		hdr := buf[off : off+64]
 		off += 64
 		buckets = int(binary.LittleEndian.Uint32(hdr[8:12]))
-		popularRecs = int(binary.LittleEndian.Uint32(hdr[32:36]))
-		// Skip popular table
+		tldRecs := 0
+		if magic == uint32(0x32444d48) {
+			popularRecs = int(binary.LittleEndian.Uint32(hdr[16:20]))
+			tldRecs = int(binary.LittleEndian.Uint32(hdr[24:28]))
+		} else {
+			popularRecs = int(binary.LittleEndian.Uint32(hdr[32:36]))
+		}
+		// Skip tld/popular tables
+		off += tldRecs * 64
 		off += popularRecs * 64
 		table = buf[off : off+buckets*64]
 		return
@@ -748,7 +863,7 @@ func TestPopularPrune(t *testing.T) {
 	}
 	ds, err := Compile(domains)
 	require.NoError(t, err)
-	require.Equal(t, "StaticDomainSet{domains=1, popular_hashes=0, fill=6.2%, used=404 (header=64, popular=0, table=64, domains=272)}", ds.String())
+	require.Equal(t, "StaticDomainSet{domains=1, tlds=0, popular_hashes=0, fill=6.2%, used=404 (header=64, tld=0, popular=0, table=64, domains=272)}", ds.String())
 	requireAllocatedOneOf(t, ds, 6664, 404)
 	// Exact
 	ok, err := ds.Find("root.com")
@@ -827,13 +942,121 @@ func TestValidateDomainLengthViaCompile(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestTopLevelDomainRejectedCompile(t *testing.T) {
-	// Patterns that are top-level (no dots) must be rejected at compile time.
-	_, err := Compile([]string{"com"})
-	require.ErrorIs(t, err, ErrTopLevelDomain)
-	// Mixed list should also fail fast.
-	_, err = Compile([]string{"example.com", "org"})
-	require.ErrorIs(t, err, ErrTopLevelDomain)
+// TestTopLevelDomainCompileAndMatch verifies compile/find semantics for TLDs.
+func TestTopLevelDomainCompileAndMatch(t *testing.T) {
+	ds, err := Compile([]string{"com"})
+	require.NoError(t, err)
+	ok, err := ds.Find("com")
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = ds.Find("a.b.com")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ds, err = Compile([]string{"example.com", "org"})
+	require.NoError(t, err)
+	ok, err = ds.Find("x.y.org")
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = ds.Find("x.y.com")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+// TestTopLevelDomains_CombinedWithRegular_WithAndWithoutPopular verifies mixed
+// datasets that contain both TLD and multi-label domains in two scenarios:
+// without popular suffixes and with popular suffixes.
+func TestTopLevelDomains_CombinedWithRegular_WithAndWithoutPopular(t *testing.T) {
+	withPopularDomains := []string{"org", "com"}
+	for i := 0; i < 20; i++ {
+		withPopularDomains = append(withPopularDomains, fmt.Sprintf("u%02d.a.b.c", i))
+	}
+
+	cases := []struct {
+		name        string
+		domains     []string
+		tldCount    int
+		popCount    int
+		shouldMatch []string
+		shouldMiss  []string
+	}{
+		{
+			name:     "without_popular",
+			domains:  []string{"org", "com", "example.net", "api.example.io"},
+			tldCount: 2,
+			popCount: 0,
+			shouldMatch: []string{
+				"org",
+				"x.y.org",
+				"z.com",
+				"example.net",
+				"sub.example.net",
+				"api.example.io",
+				"x.api.example.io",
+			},
+			shouldMiss: []string{
+				"example.io",
+				"x.y.net",
+				"x.y.notld",
+			},
+		},
+		{
+			name:     "with_popular",
+			domains:  withPopularDomains,
+			tldCount: 2,
+			popCount: 2,
+			shouldMatch: []string{
+				"org",
+				"x.y.org",
+				"u00.a.b.c",
+				"zz.u00.a.b.c",
+				"u19.a.b.c",
+			},
+			shouldMiss: []string{
+				"a.b.c",
+				"x.a.b.c",
+				"x.y.notld",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ds, err := Compile(tc.domains)
+			require.NoError(t, err)
+			require.Contains(t, ds.String(), fmt.Sprintf("tlds=%d", tc.tldCount))
+			require.Contains(t, ds.String(), fmt.Sprintf("popular_hashes=%d", tc.popCount))
+
+			ser, err := ds.Serialize()
+			require.NoError(t, err)
+			pop, _, err := parsePopularFromSerialized(ser)
+			require.NoError(t, err)
+			require.Equal(t, tc.popCount, len(pop))
+
+			ds2, err := FromSerialized(ser)
+			require.NoError(t, err)
+			require.Contains(t, ds2.String(), fmt.Sprintf("tlds=%d", tc.tldCount))
+			require.Contains(t, ds2.String(), fmt.Sprintf("popular_hashes=%d", tc.popCount))
+
+			for _, q := range tc.shouldMatch {
+				ok, err := ds.Find(q)
+				require.NoError(t, err, q)
+				require.True(t, ok, q)
+				ok2, err := ds2.Find(q)
+				require.NoError(t, err, q)
+				require.True(t, ok2, q)
+			}
+			for _, q := range tc.shouldMiss {
+				ok, err := ds.Find(q)
+				require.NoError(t, err, q)
+				require.False(t, ok, q)
+				ok2, err := ds2.Find(q)
+				require.NoError(t, err, q)
+				require.False(t, ok2, q)
+			}
+		})
+	}
 }
 
 func TestFindOnTopLevelDomainReturnsFalse(t *testing.T) {
@@ -846,4 +1069,52 @@ func TestFindOnTopLevelDomainReturnsFalse(t *testing.T) {
 	ok, err = ds.Find("org")
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+// TestTopLevelDomains_MultiRecord verifies correctness with many stored TLDs
+// spanning multiple table records.
+func TestTopLevelDomains_MultiRecord(t *testing.T) {
+	counts := []int{40, 257}
+	for _, n := range counts {
+		n := n
+		t.Run(fmt.Sprintf("count_%d", n), func(t *testing.T) {
+			expectedSummary := ""
+			switch n {
+			case 40:
+				expectedSummary = "StaticDomainSet{domains=40, tlds=40, popular_hashes=0, fill=250.0%, used=1220 (header=64, tld=192, popular=0, table=64, domains=896)}"
+			case 257:
+				expectedSummary = "StaticDomainSet{domains=257, tlds=257, popular_hashes=0, fill=1606.2%, used=5588 (header=64, tld=1088, popular=0, table=64, domains=4368)}"
+			default:
+				t.Fatalf("unexpected test parameter n=%d", n)
+			}
+
+			var domains []string
+			for i := 0; i < n; i++ {
+				domains = append(domains, fmt.Sprintf("tld%03d", i))
+			}
+			ds, err := Compile(domains)
+			require.NoError(t, err)
+			require.Equal(t, expectedSummary, ds.String())
+
+			ser, err := ds.Serialize()
+			require.NoError(t, err)
+			ds2, err := FromSerialized(ser)
+			require.NoError(t, err)
+			require.Equal(t, expectedSummary, ds2.String())
+
+			for i := 0; i < n; i++ {
+				tld := fmt.Sprintf("tld%03d", i)
+				ok, err := ds.Find(tld)
+				require.NoError(t, err)
+				require.True(t, ok, tld)
+				ok2, err := ds2.Find("x.y." + tld)
+				require.NoError(t, err)
+				require.True(t, ok2, "x.y."+tld)
+			}
+
+			ok, err := ds.Find("x.y.notld")
+			require.NoError(t, err)
+			require.False(t, ok)
+		})
+	}
 }

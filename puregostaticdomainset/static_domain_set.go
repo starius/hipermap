@@ -15,7 +15,8 @@ import (
 const (
 	dSlots             = 16
 	maxDomainLen       = 253
-	magicUint32        = 0x53444D48 // HMDS in little-endian bytes
+	magicV1Uint32      = 0x53444D48 // HMDS (v1)
+	magicV2Uint32      = 0x32444D48 // HMD2 (v2)
 	headerBytes        = 64         // round_up64(sizeof(hm_domain_database_t)) on 64-bit
 	recordBytes        = 64         // sizeof(domains_table_record_t)
 	blobTailPad        = 256        // safety pad after blob for comparisons
@@ -36,10 +37,12 @@ type StaticDomainSet struct {
 	fastModM uint64
 
 	table   []domainsTableRecord
+	tld     []domainsTableRecord
 	popular []domainsTableRecord
 	blob    []byte // concatenated, 16-byte aligned strings + 0x00 terminators + tail pad
 
 	seed     uint32
+	tldCount uint32
 	popCount uint32
 }
 
@@ -47,9 +50,10 @@ var (
 	ErrNoDomains             = errors.New("no domains")
 	ErrEmptyDomain           = errors.New("empty domain")
 	ErrInvalidDomainChars    = errors.New("invalid domain characters")
-	ErrTopLevelDomain        = errors.New("top-level domains are not supported")
 	ErrTooManyPopularDomains = errors.New("too many popular domains")
 	ErrFailedToCalibrate     = errors.New("failed to calibrate")
+	// Deprecated: top-level domains are supported starting with serialization v2.
+	ErrTopLevelDomain = errors.New("top-level domains are not supported")
 )
 
 // Compile builds a static domain set from a slice of domains.
@@ -67,24 +71,20 @@ func Compile(domains []string) (*StaticDomainSet, error) {
 	if len(views) == 0 {
 		return nil, ErrNoDomains
 	}
-	// Reject top-level (no dot) domains.
-	for _, v := range views {
-		if !strings.Contains(v, ".") {
-			return nil, ErrTopLevelDomain
-		}
-	}
+	regular, tlds := splitRegularAndTLD(views)
 
 	// Find popular suffixes (unique, sorted).
-	popular := findPopularSuffixes(views)
+	popular := findPopularSuffixes(regular)
 	if len(popular) > maxPopularSuffixes {
 		return nil, ErrTooManyPopularDomains
 	}
 
 	// Calibrate seed + buckets and build previews without overflow.
-	calib, ok := calibrateAndPreview(views, popular)
+	calib, ok := calibrateAndPreview(regular, popular)
 	if !ok {
 		return nil, ErrFailedToCalibrate
 	}
+	calib.tlds = tlds
 
 	// Build the runtime database from preview.
 	s := &StaticDomainSet{}
@@ -113,6 +113,15 @@ func (s *StaticDomainSet) Find(domain string) (bool, error) {
 	lower := make([]byte, len(domain))
 	if !domainToLower(lower, domain) {
 		return false, findError(-1)
+	}
+
+	// TLD-first path: match the last label against tld table.
+	tldStart := cutLastDomainLabel(lower)
+	tldSuffix := lower[tldStart:]
+	tldHash := hash64Span(tldSuffix, uint64(s.seed))
+	tldTag := uint16((tldHash >> 32) & 0xFFFF)
+	if scanRecordSet(s.tld, tldTag, tldSuffix, s.blob) {
+		return true, nil
 	}
 
 	// Initial suffix: last two labels (or fewer if not enough labels).
@@ -175,39 +184,45 @@ func (s *StaticDomainSet) Seed() uint32 {
 }
 
 // Serialize emits a buffer compatible with gostaticdomainset/C:
-// [4-byte magic] [64-byte header] [popular records] [table records] [blob]
+// [4-byte magic] [64-byte header] [tld records] [popular records] [table records] [blob]
 func (s *StaticDomainSet) Serialize() ([]byte, error) {
 	if s == nil || len(s.table) == 0 {
 		return nil, fmt.Errorf("empty set")
 	}
+	tldBytes := len(s.tld) * recordBytes
 	popBytes := len(s.popular) * recordBytes
 	tblBytes := len(s.table) * recordBytes
-	need := 4 + headerBytes + popBytes + tblBytes + len(s.blob)
+	need := 4 + headerBytes + tldBytes + popBytes + tblBytes + len(s.blob)
 	buf := make([]byte, need)
 	// Magic
-	binary.LittleEndian.PutUint32(buf[0:4], magicUint32)
+	binary.LittleEndian.PutUint32(buf[0:4], magicV2Uint32)
 
-	// Header layout (64 bytes total):
+	// v2 header layout (64 bytes):
 	//  0: fastmod_M (u64)
 	//  8: buckets (u32)
 	// 12: hash_seed (u32)
-	// 16: domains_table ptr (ignored) (u64)
-	// 24: popular_table ptr (ignored) (u64)
-	// 32: popular_records (u32)
-	// 36: popular_count (u32)
-	// 40: domains_blob ptr (ignored) (u64)
-	// 48: domains_blob_size (size_t/u64)
+	// 16: popular_records (u32)
+	// 20: popular_count (u32)
+	// 24: tld_records (u32)
+	// 28: tld_count (u32)
+	// 32: domains_blob_size (u64)
 	off := 4
 	binary.LittleEndian.PutUint64(buf[off+0:], s.fastModM)
 	binary.LittleEndian.PutUint32(buf[off+8:], uint32(len(s.table)))
 	binary.LittleEndian.PutUint32(buf[off+12:], s.seed)
-	// ptrs left as zero
-	binary.LittleEndian.PutUint32(buf[off+32:], uint32(len(s.popular)))
-	binary.LittleEndian.PutUint32(buf[off+36:], s.popCount)
-	binary.LittleEndian.PutUint64(buf[off+48:], uint64(len(s.blob)))
+	binary.LittleEndian.PutUint32(buf[off+16:], uint32(len(s.popular)))
+	binary.LittleEndian.PutUint32(buf[off+20:], s.popCount)
+	binary.LittleEndian.PutUint32(buf[off+24:], uint32(len(s.tld)))
+	binary.LittleEndian.PutUint32(buf[off+28:], s.tldCount)
+	binary.LittleEndian.PutUint64(buf[off+32:], uint64(len(s.blob)))
 
-	// Popular records
+	// TLD records
 	at := 4 + headerBytes
+	for i := range s.tld {
+		writeRecord(buf[at:at+recordBytes], &s.tld[i])
+		at += recordBytes
+	}
+	// Popular records
 	for i := range s.popular {
 		writeRecord(buf[at:at+recordBytes], &s.popular[i])
 		at += recordBytes
@@ -227,24 +242,89 @@ func FromSerialized(buffer []byte) (*StaticDomainSet, error) {
 	if len(buffer) < 4+headerBytes {
 		return nil, fmt.Errorf("buffer too small")
 	}
-	if binary.LittleEndian.Uint32(buffer[0:4]) != magicUint32 {
+	magic := binary.LittleEndian.Uint32(buffer[0:4])
+
+	var (
+		fastM      uint64
+		buckets    uint32
+		seed       uint32
+		popRecords uint32
+		popCount   uint32
+		tldRecords uint32
+		tldCount   uint32
+		blobBytes  uint64
+		isV2       bool
+	)
+
+	hdr := buffer[4 : 4+headerBytes]
+	switch magic {
+	case magicV1Uint32:
+		fastM = binary.LittleEndian.Uint64(hdr[0:8])
+		buckets = binary.LittleEndian.Uint32(hdr[8:12])
+		seed = binary.LittleEndian.Uint32(hdr[12:16])
+		popRecords = binary.LittleEndian.Uint32(hdr[32:36])
+		popCount = binary.LittleEndian.Uint32(hdr[36:40])
+		tldRecords = 0
+		tldCount = 0
+		blobBytes = binary.LittleEndian.Uint64(hdr[48:56])
+		isV2 = false
+	case magicV2Uint32:
+		fastM = binary.LittleEndian.Uint64(hdr[0:8])
+		buckets = binary.LittleEndian.Uint32(hdr[8:12])
+		seed = binary.LittleEndian.Uint32(hdr[12:16])
+		popRecords = binary.LittleEndian.Uint32(hdr[16:20])
+		popCount = binary.LittleEndian.Uint32(hdr[20:24])
+		tldRecords = binary.LittleEndian.Uint32(hdr[24:28])
+		tldCount = binary.LittleEndian.Uint32(hdr[28:32])
+		blobBytes = binary.LittleEndian.Uint64(hdr[32:40])
+		isV2 = true
+	default:
 		return nil, fmt.Errorf("bad magic")
 	}
-	hdr := buffer[4 : 4+headerBytes]
-	fastM := binary.LittleEndian.Uint64(hdr[0:8])
-	buckets := binary.LittleEndian.Uint32(hdr[8:12])
-	seed := binary.LittleEndian.Uint32(hdr[12:16])
-	popRecords := binary.LittleEndian.Uint32(hdr[32:36])
-	popCount := binary.LittleEndian.Uint32(hdr[36:40])
-	blobBytes := binary.LittleEndian.Uint64(hdr[48:56])
+
 	if blobBytes%16 != 0 || blobBytes < blobTailPad {
 		return nil, fmt.Errorf("invalid blob size")
+	}
+	if buckets == 0 {
+		return nil, fmt.Errorf("invalid buckets")
+	}
+	if uint64(popCount) > uint64(popRecords)*dSlots {
+		return nil, fmt.Errorf("popular count mismatch")
+	}
+	if uint64(tldCount) > uint64(tldRecords)*dSlots {
+		return nil, fmt.Errorf("tld count mismatch")
+	}
+
+	// Prevent integer overflows before converting to int or allocating.
+	maxInt := uint64(^uint(0) >> 1)
+	if uint64(buckets) > maxInt || uint64(popRecords) > maxInt || uint64(tldRecords) > maxInt || blobBytes > maxInt {
+		return nil, fmt.Errorf("serialized payload too large")
 	}
 
 	// Ranges
 	at := 4 + headerBytes
-	needAfterHdr := int(popRecords)*recordBytes + int(buckets)*recordBytes + int(blobBytes)
-	if len(buffer)-at < needAfterHdr {
+	addU64 := func(a, b uint64) (uint64, bool) {
+		if a > ^uint64(0)-b {
+			return 0, false
+		}
+		return a + b, true
+	}
+	tldBytes := uint64(tldRecords) * recordBytes
+	popBytes := uint64(popRecords) * recordBytes
+	tblBytes := uint64(buckets) * recordBytes
+	needAfterHdr, ok := addU64(tldBytes, popBytes)
+	if !ok {
+		return nil, fmt.Errorf("serialized payload size overflow")
+	}
+	needAfterHdr, ok = addU64(needAfterHdr, tblBytes)
+	if !ok {
+		return nil, fmt.Errorf("serialized payload size overflow")
+	}
+	needAfterHdr, ok = addU64(needAfterHdr, blobBytes)
+	if !ok {
+		return nil, fmt.Errorf("serialized payload size overflow")
+	}
+	if uint64(len(buffer)-at) < needAfterHdr {
 		return nil, fmt.Errorf("buffer truncated")
 	}
 
@@ -252,10 +332,18 @@ func FromSerialized(buffer []byte) (*StaticDomainSet, error) {
 		seed:     seed,
 		fastModM: fastM,
 		popCount: popCount,
+		tldCount: tldCount,
+		tld:      make([]domainsTableRecord, tldRecords),
 		popular:  make([]domainsTableRecord, popRecords),
 		table:    make([]domainsTableRecord, buckets),
 	}
 
+	if isV2 {
+		for i := 0; i < int(tldRecords); i++ {
+			readRecord(buffer[at:at+recordBytes], &s.tld[i])
+			at += recordBytes
+		}
+	}
 	for i := 0; i < int(popRecords); i++ {
 		readRecord(buffer[at:at+recordBytes], &s.popular[i])
 		at += recordBytes
@@ -269,6 +357,9 @@ func FromSerialized(buffer []byte) (*StaticDomainSet, error) {
 	if uint32(s.popularSuffixCount()) != popCount {
 		return nil, fmt.Errorf("popular count mismatch")
 	}
+	if uint32(s.tldSuffixCount()) != tldCount {
+		return nil, fmt.Errorf("tld count mismatch")
+	}
 	return s, nil
 }
 
@@ -281,6 +372,7 @@ func (s *StaticDomainSet) String() string {
 	for i := range s.table {
 		usedTotal += int(s.table[i].used)
 	}
+	usedTotal += int(s.tldCount)
 	capCells := len(s.table) * dSlots
 	var fillPct float64
 	if capCells > 0 {
@@ -288,12 +380,13 @@ func (s *StaticDomainSet) String() string {
 	}
 
 	header := headerBytes
+	tld := len(s.tld) * recordBytes
 	popular := len(s.popular) * recordBytes
 	table := len(s.table) * recordBytes
 	blob := len(s.blob)
-	used := 4 + header + popular + table + blob
-	return fmt.Sprintf("StaticDomainSet{domains=%d, popular_hashes=%d, fill=%.1f%%, used=%d (header=%d, popular=%d, table=%d, domains=%d)}",
-		usedTotal, s.popCount, fillPct, used, header, popular, table, blob)
+	used := 4 + header + tld + popular + table + blob
+	return fmt.Sprintf("StaticDomainSet{domains=%d, tlds=%d, popular_hashes=%d, fill=%.1f%%, used=%d (header=%d, tld=%d, popular=%d, table=%d, domains=%d)}",
+		usedTotal, s.tldCount, s.popCount, fillPct, used, header, tld, popular, table, blob)
 }
 
 // Allocated returns the total size of the materialized database in bytes.
@@ -302,7 +395,7 @@ func (s *StaticDomainSet) Allocated() int {
 		return 0
 	}
 	header := headerBytes
-	popular := len(s.popular) * recordBytes
+	popular := (len(s.popular) + len(s.tld)) * recordBytes
 	table := len(s.table) * recordBytes
 	blob := len(s.blob)
 	return 4 + header + popular + table + blob
@@ -315,6 +408,18 @@ func (s *StaticDomainSet) popularSuffixCount() int {
 	total := 0
 	for i := range s.popular {
 		total += int(s.popular[i].used)
+	}
+	return total
+}
+
+// tldSuffixCount returns how many TLD strings are stored in the set.
+func (s *StaticDomainSet) tldSuffixCount() int {
+	if s == nil {
+		return 0
+	}
+	total := 0
+	for i := range s.tld {
+		total += int(s.tld[i].used)
 	}
 	return total
 }
@@ -421,6 +526,20 @@ func preprocessDomains(domains []string) ([]string, error) {
 	// Remove duplicates and prune subdomains.
 	items = pruneSubdomains(items)
 	return items, nil
+}
+
+// splitRegularAndTLD partitions domains into multi-label and single-label sets.
+func splitRegularAndTLD(domains []string) ([]string, []string) {
+	regular := make([]string, 0, len(domains))
+	tlds := make([]string, 0, len(domains))
+	for _, d := range domains {
+		if strings.IndexByte(d, '.') == -1 {
+			tlds = append(tlds, d)
+		} else {
+			regular = append(regular, d)
+		}
+	}
+	return regular, tlds
 }
 
 // lessRevChar compares by reversed characters.
@@ -551,6 +670,7 @@ type previewRecord struct {
 }
 
 type calibrationResult struct {
+	tlds    []string
 	popular []string
 	buckets []previewRecord
 	seed    uint32
@@ -650,8 +770,12 @@ func stringInSlice(s string, arr []string) bool {
 
 func (s *StaticDomainSet) buildFromPreview(cal calibrationResult) error {
 	s.seed = cal.seed
-	// Sizes for blob: popular first, then buckets; each string rounded to 16; plus tail pad.
+	// Sizes for blob: tld first, then popular, then buckets; each string
+	// rounded to 16; plus tail pad.
 	blobSize := 0
+	for _, sv := range cal.tlds {
+		blobSize += roundUp16(len(sv) + 1)
+	}
 	for _, sv := range cal.popular {
 		blobSize += roundUp16(len(sv) + 1)
 	}
@@ -663,13 +787,49 @@ func (s *StaticDomainSet) buildFromPreview(cal calibrationResult) error {
 	blobSize += blobTailPad
 
 	s.blob = make([]byte, blobSize)
+	s.tld = make([]domainsTableRecord, (len(cal.tlds)+dSlots-1)/dSlots)
 	s.popular = make([]domainsTableRecord, (len(cal.popular)+dSlots-1)/dSlots)
 	s.table = make([]domainsTableRecord, len(cal.buckets))
 	s.fastModM = computeM(uint32(len(s.table)))
 	s.popCount = uint32(len(cal.popular))
+	s.tldCount = uint32(len(cal.tlds))
+
+	// Build TLD table.
+	cur := 0
+	for r := 0; r < len(s.tld); r++ {
+		rec := &s.tld[r]
+		rec.baseOff = uint32(cur)
+		base := cur
+		for i := 0; i < dSlots; i++ {
+			idx := r*dSlots + i
+			if idx >= len(cal.tlds) {
+				break
+			}
+			sv := cal.tlds[idx]
+			h := hash64Span([]byte(sv), uint64(s.seed))
+			tag := uint16((h >> 32) & 0xFFFF)
+			offUnits := (cur - base) / dSlots
+			if offUnits > 255 {
+				return fmt.Errorf("tld offset overflow")
+			}
+			rec.offsets[rec.used] = uint8(offUnits)
+			rec.tags[rec.used] = tag
+			copy(s.blob[cur:], sv)
+			cur += len(sv)
+			s.blob[cur] = 0
+			cur++
+			pad := roundUp16(cur) - cur
+			if pad > 0 {
+				cur += pad
+			}
+			rec.used++
+		}
+		if rec.used > 0 {
+			rec.maxScans = 1
+		}
+	}
 
 	// Build popular table
-	cur := 0
 	for r := 0; r < len(s.popular); r++ {
 		rec := &s.popular[r]
 		rec.baseOff = uint32(cur)
@@ -745,27 +905,7 @@ func (s *StaticDomainSet) buildFromPreview(cal calibrationResult) error {
 }
 
 func (s *StaticDomainSet) popularSuffixExists(tag uint16, suffix []byte) bool {
-	sfxLen := len(suffix)
-	for r := range s.popular {
-		rec := &s.popular[r]
-		if rec.used == 0 {
-			continue
-		}
-		// linear scan up to used slots
-		for i := 0; i < int(rec.used); i++ {
-			if rec.tags[i] != tag {
-				continue
-			}
-			pos := int(rec.baseOff) + int(rec.offsets[i])*dSlots
-			if pos+sfxLen >= len(s.blob) {
-				continue
-			}
-			if bytes.Equal(s.blob[pos:pos+sfxLen], suffix) && s.blob[pos+sfxLen] == 0 {
-				return true
-			}
-		}
-	}
-	return false
+	return scanRecordSet(s.popular, tag, suffix, s.blob)
 }
 
 func scanTags(rec *domainsTableRecord, tag uint16, blob []byte, suffixStart int, lower []byte) bool {
@@ -786,6 +926,30 @@ func scanTags(rec *domainsTableRecord, tag uint16, blob []byte, suffixStart int,
 		}
 		if bytes.Equal(blob[pos:pos+sfxLen], suffix) && blob[pos+sfxLen] == 0 {
 			return true
+		}
+	}
+	return false
+}
+
+// scanRecordSet scans all records for (tag, suffix) exact-string matches.
+func scanRecordSet(records []domainsTableRecord, tag uint16, suffix []byte, blob []byte) bool {
+	sfxLen := len(suffix)
+	for r := range records {
+		rec := &records[r]
+		if rec.used == 0 {
+			continue
+		}
+		for i := 0; i < int(rec.used); i++ {
+			if rec.tags[i] != tag {
+				continue
+			}
+			pos := int(rec.baseOff) + int(rec.offsets[i])*dSlots
+			if pos+sfxLen >= len(blob) {
+				continue
+			}
+			if bytes.Equal(blob[pos:pos+sfxLen], suffix) && blob[pos+sfxLen] == 0 {
+				return true
+			}
 		}
 	}
 	return false
