@@ -38,6 +38,8 @@ build:
 	@echo "==> Build Go tools"
 	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" \
 		go build -trimpath -buildvcs=false -o $(PREFIX)/bin/verify ./gostaticdomainset/cmd/verify
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" \
+		go build -trimpath -buildvcs=false -o $(PREFIX)/bin/sds-compile ./gostaticdomainset/cmd/sds-compile
 	@echo "Build complete. Binaries in $(PREFIX)/bin, install tree at $(PREFIX)."
 
 # Run all Go tests in all subpackages
