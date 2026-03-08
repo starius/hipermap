@@ -11,7 +11,8 @@ import (
 )
 
 func TestPureCGOSerializationCompatibility(t *testing.T) {
-	domains := sampleDomainStrings
+	domains := append([]string{}, sampleDomainStrings...)
+	domains = append(domains, "com", "info")
 
 	cgoSet, err := Compile(domains)
 	require.NoError(t, err)

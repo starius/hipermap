@@ -39,9 +39,76 @@
 #define SIMD_TAIL_PAD 64   // bytes to absorb SIMD tail loads
 #define ALIGN_HEADROOM 64  // headroom to realign db_place base
 
-#define STATIC_DOMAIN_SET_MAGIC 0x53444D48u
+#define STATIC_DOMAIN_SET_MAGIC_V1 0x53444D48u
+#define STATIC_DOMAIN_SET_MAGIC_V2 0x32444D48u
+#define SERIALIZED_HEADER_BYTES 64u
 
 static_assert(sizeof(domains_table_record_t) == 64, "Struct must be 64 bytes");
+
+// serialized_header_v2_t is the fixed-size on-disk header layout for
+// serialization format v2.
+struct serialized_header_v2_t {
+  // fastmod_M is the precomputed multiplier for bucket modulus.
+  uint64_t fastmod_M;
+
+  // buckets is the number of main hash-table records.
+  uint32_t buckets;
+
+  // hash_seed is the compile-time selected seed for XXH3 chaining.
+  uint32_t hash_seed;
+
+  // popular_records is the number of records in popular_table.
+  uint32_t popular_records;
+
+  // popular_count is the number of popular suffix strings.
+  uint32_t popular_count;
+
+  // tld_records is the number of records in tld_table.
+  uint32_t tld_records;
+
+  // tld_count is the number of top-level domains stored in tld_table.
+  uint32_t tld_count;
+
+  // domains_blob_size is the size of serialized string storage in bytes.
+  uint64_t domains_blob_size;
+
+  // reserved keeps the v2 header fixed at 64 bytes for future extensions.
+  uint8_t reserved[SERIALIZED_HEADER_BYTES - 40];
+};
+
+static_assert(sizeof(serialized_header_v2_t) == SERIALIZED_HEADER_BYTES,
+              "v2 serialized header must be 64 bytes");
+
+// serialized_meta_t stores normalized parsed metadata from v1 or v2 serialized
+// bytes.
+struct serialized_meta_t {
+  // is_v2 indicates whether serialized bytes were parsed as v2 format.
+  bool is_v2 = false;
+
+  // fastmod_M is copied from header and used to restore runtime DB state.
+  uint64_t fastmod_M = 0;
+
+  // buckets is the number of main table records in serialized payload.
+  uint32_t buckets = 0;
+
+  // hash_seed is the seed used by hashing during lookup.
+  uint32_t hash_seed = 0;
+
+  // popular_records is the count of serialized popular records.
+  uint32_t popular_records = 0;
+
+  // popular_count is the number of popular suffix strings.
+  uint32_t popular_count = 0;
+
+  // tld_records is the count of serialized TLD records (v2 only).
+  uint32_t tld_records = 0;
+
+  // tld_count is the number of TLD strings (v2 only).
+  uint32_t tld_count = 0;
+
+  // blob_bytes is the size of serialized blob region.
+  uint64_t blob_bytes = 0;
+};
 
 static inline char* align(char* addr, size_t alignment) {
   return (char*)(((uintptr_t)(addr) & ~(uintptr_t)(alignment - 1)) + alignment);
@@ -50,6 +117,91 @@ static inline char* align(char* addr, size_t alignment) {
 static inline size_t round_up16(size_t x) { return (x + 15) & ~15; }
 
 static inline size_t round_up64(size_t x) { return (x + 63) & ~63; }
+
+// add_size_overflow returns true if a+b would overflow size_t.
+static inline bool add_size_overflow(size_t a, size_t b, size_t* out) {
+  if (!out) {
+    return true;
+  }
+  if (a > SIZE_MAX - b) {
+    return true;
+  }
+  *out = a + b;
+  return false;
+}
+
+// mul_size_overflow returns true if a*b would overflow size_t.
+static inline bool mul_size_overflow(size_t a, size_t b, size_t* out) {
+  if (!out) {
+    return true;
+  }
+  if (a == 0 || b == 0) {
+    *out = 0;
+    return false;
+  }
+  if (a > SIZE_MAX / b) {
+    return true;
+  }
+  *out = a * b;
+  return false;
+}
+
+// write_u32 stores a little-endian uint32 into byte buffer p.
+static inline void write_u32(char* p, uint32_t v) { memcpy(p, &v, sizeof(v)); }
+
+// write_u64 stores a little-endian uint64 into byte buffer p.
+static inline void write_u64(char* p, uint64_t v) { memcpy(p, &v, sizeof(v)); }
+
+// read_u32 loads a little-endian uint32 from byte buffer p.
+static inline uint32_t read_u32(const char* p) {
+  uint32_t v = 0;
+  memcpy(&v, p, sizeof(v));
+  return v;
+}
+
+// read_u64 loads a little-endian uint64 from byte buffer p.
+static inline uint64_t read_u64(const char* p) {
+  uint64_t v = 0;
+  memcpy(&v, p, sizeof(v));
+  return v;
+}
+
+// parse_serialized_meta parses v1/v2 serialized headers into normalized
+// metadata used by deserialization and size validation.
+static inline bool parse_serialized_meta(const char* buffer, size_t buffer_size,
+                                         serialized_meta_t* out) {
+  if (!buffer || !out || buffer_size < 4 + SERIALIZED_HEADER_BYTES) {
+    return false;
+  }
+  uint32_t magic = read_u32(buffer);
+  const char* hdr = buffer + 4;
+  if (magic == STATIC_DOMAIN_SET_MAGIC_V2) {
+    out->is_v2 = true;
+    out->fastmod_M = read_u64(hdr + 0);
+    out->buckets = read_u32(hdr + 8);
+    out->hash_seed = read_u32(hdr + 12);
+    out->popular_records = read_u32(hdr + 16);
+    out->popular_count = read_u32(hdr + 20);
+    out->tld_records = read_u32(hdr + 24);
+    out->tld_count = read_u32(hdr + 28);
+    out->blob_bytes = read_u64(hdr + 32);
+    return true;
+  }
+  if (magic == STATIC_DOMAIN_SET_MAGIC_V1) {
+    // v1 header is hm_domain_database_t serialized as a 64-byte block.
+    out->is_v2 = false;
+    out->fastmod_M = read_u64(hdr + 0);
+    out->buckets = read_u32(hdr + 8);
+    out->hash_seed = read_u32(hdr + 12);
+    out->popular_records = read_u32(hdr + 32);
+    out->popular_count = read_u32(hdr + 36);
+    out->tld_records = 0;
+    out->tld_count = 0;
+    out->blob_bytes = read_u64(hdr + 48);
+    return true;
+  }
+  return false;
+}
 
 // less_rev_char compares two strings from the last character backwards.
 // A shorter suffix-only string (e.g., "example.com") will precede its
@@ -148,6 +300,25 @@ static bool preprocess_domains_views(
   }
   prune_subdomains_revchar(domains_views);
   return true;
+}
+
+// split_regular_and_tld_domains separates input domains into multi-label
+// regular domains and single-label top-level domains.
+static void split_regular_and_tld_domains(
+    const std::vector<std::string_view>& all_domains,
+    std::vector<std::string_view>& regular_domains,
+    std::vector<std::string_view>& tld_domains) {
+  regular_domains.clear();
+  tld_domains.clear();
+  regular_domains.reserve(all_domains.size());
+  tld_domains.reserve(all_domains.size());
+  for (const auto& sv : all_domains) {
+    if (memchr(sv.data(), '.', sv.size()) == nullptr) {
+      tld_domains.push_back(sv);
+    } else {
+      regular_domains.push_back(sv);
+    }
+  }
 }
 
 // suffix_last_k_labels returns the last k labels of s, or the whole string if
@@ -321,9 +492,19 @@ static bool try_build_records(
   return true;
 }
 
+// calibration_result_t stores calibration outputs needed to build runtime DB
+// memory layout.
 struct calibration_result_t {
+  // tld_domains contains deduplicated single-label domains.
+  std::vector<std::string_view> tld_domains;
+
+  // popular_suffixes contains selected popular suffix strings.
   std::vector<std::string_view> popular_suffixes;
+
+  // preview_buckets holds calibrated per-bucket compile previews.
   std::vector<compile_record_preview_t> preview_buckets;
+
+  // seed is the selected hash seed that avoids bucket overflow.
   uint32_t seed = 0;
 };
 
@@ -385,12 +566,17 @@ static hm_error_t build_db_from_preview(char* db_place, size_t db_place_size,
 
   size_t buckets_num = calib.preview_buckets.size();
 
-  // Calculate sizes of remaining components: buckets table, popular_table, and
-  // the domains blob (popular suffixes first).
+  // Calculate sizes of remaining components: tld table, popular table, main
+  // buckets table, and domains blob.
+  size_t tld_records = (calib.tld_domains.size() + D - 1) / D;
+  size_t tld_bytes = tld_records * sizeof(domains_table_record_t);
   size_t table_bytes = buckets_num * sizeof(domains_table_record_t);
   size_t popular_records = (calib.popular_suffixes.size() + D - 1) / D;
   size_t popular_bytes = popular_records * sizeof(domains_table_record_t);
   size_t blob_bytes = 0;
+  for (const auto& sv : calib.tld_domains) {
+    blob_bytes += round_up16(sv.size() + 1);
+  }
   for (const auto& sv : calib.popular_suffixes) {
     blob_bytes += round_up16(sv.size() + 1);
   }
@@ -403,7 +589,8 @@ static hm_error_t build_db_from_preview(char* db_place, size_t db_place_size,
   // Add space for memcmp inside scan_tags and general SIMD tail.
   blob_bytes += 256;
 
-  size_t total_bytes_after_header = table_bytes + popular_bytes + blob_bytes;
+  size_t total_bytes_after_header =
+      tld_bytes + popular_bytes + table_bytes + blob_bytes;
 
   place_left = db_place_size - (size_t)(p - db_place);
   if (place_left < total_bytes_after_header) {
@@ -418,7 +605,13 @@ static hm_error_t build_db_from_preview(char* db_place, size_t db_place_size,
   db->fastmod_M = fastmod::computeM_u32(buckets_num);
   db->hash_seed = calib.seed;
 
-  // Popular table goes first after the header (aligned)
+  // TLD table goes first after the header.
+  db->tld_table = (domains_table_record_t*)p;
+  db->tld_records = (uint32_t)tld_records;
+  db->tld_count = (uint32_t)calib.tld_domains.size();
+  p += tld_bytes;
+
+  // Then popular table.
   db->popular_table = (domains_table_record_t*)p;
   db->popular_records = (uint32_t)popular_records;
   db->popular_count = (uint32_t)calib.popular_suffixes.size();
@@ -432,7 +625,38 @@ static hm_error_t build_db_from_preview(char* db_place, size_t db_place_size,
   char* blob = db->domains_blob;
   size_t cur_blob = 0;
 
-  // Build popular table first: lay out suffixes and fill records
+  // Build TLD table.
+  for (uint32_t r = 0; r < db->tld_records; r++) {
+    domains_table_record_t& dst_rec = db->tld_table[r];
+    dst_rec.used_slots = 0;
+    dst_rec.max_scans = 0;
+    dst_rec.domains_blob_offset = (uint32_t)cur_blob;
+    dst_rec.domains_blob = blob + cur_blob;
+    size_t base_off = cur_blob;
+    for (uint32_t i = 0; i < D; i++) {
+      size_t idx = (size_t)r * D + i;
+      if (idx >= calib.tld_domains.size()) {
+        break;
+      }
+      std::string_view sv = calib.tld_domains[idx];
+      uint64_t h =
+          hash64_span_ci(sv.data(), sv.size(), (uint64_t)db->hash_seed);
+      uint16_t tag = (uint16_t)((h >> 32) & 0xFFFFu);
+      size_t off_units = (cur_blob - base_off) / D;
+      assert(off_units <= 255);
+      dst_rec.domains_offsets[dst_rec.used_slots] = (uint8_t)off_units;
+      dst_rec.domains_hashes[dst_rec.used_slots] = tag;
+      memcpy(blob + cur_blob, sv.data(), sv.size());
+      blob[cur_blob + sv.size()] = '\0';
+      cur_blob += round_up16(sv.size() + 1);
+      dst_rec.used_slots++;
+    }
+    if (dst_rec.used_slots > 0) {
+      dst_rec.max_scans = 1;
+    }
+  }
+
+  // Build popular table: lay out suffixes and fill records.
   for (uint32_t r = 0; r < db->popular_records; r++) {
     domains_table_record_t& dst_rec = db->popular_table[r];
     dst_rec.used_slots = 0;
@@ -509,7 +733,6 @@ static hm_error_t build_db_from_preview(char* db_place, size_t db_place_size,
 
 extern "C" size_t HM_CDECL hm_domain_db_place_size(const char** domains,
                                                    unsigned int elements) {
-  const size_t kAlignHeadroom = 64;
   if (elements == 0 || domains == nullptr) {
     debugf("[size] invalid inputs: elements=%u ptr=%p\n", elements,
            (void*)domains);
@@ -527,37 +750,50 @@ extern "C" size_t HM_CDECL hm_domain_db_place_size(const char** domains,
     return 0;
   }
 
-  // Start with minimum sane number of buckets.
-  size_t buckets_num = domains_views.size() / D + 1;
+  std::vector<std::string_view> regular_domains;
+  std::vector<std::string_view> tld_domains;
+  split_regular_and_tld_domains(domains_views, regular_domains, tld_domains);
 
-  for (int grow = 0; grow < CALIB_GROW_STEPS; grow++) {
-    // Increase buckets by ~5%, at least +1
-    size_t buckets_num2 = (buckets_num * CALIB_GROW_NUM) / CALIB_GROW_DEN;
-    buckets_num = std::max(buckets_num2, buckets_num + 1);
+  // Start with minimum sane number of buckets for regular domains.
+  size_t buckets_num = regular_domains.size() / D + 1;
+  if (regular_domains.empty()) {
+    buckets_num = 1;
+  } else {
+    for (int grow = 0; grow < CALIB_GROW_STEPS; grow++) {
+      // Increase buckets by ~5%, at least +1
+      size_t buckets_num2 = (buckets_num * CALIB_GROW_NUM) / CALIB_GROW_DEN;
+      buckets_num = std::max(buckets_num2, buckets_num + 1);
+    }
   }
 
   // Estimate popular suffixes to size popular table and blob head.
-  auto popular_suffixes = find_popular_suffixes(domains_views);
+  auto popular_suffixes = find_popular_suffixes(regular_domains);
 
   // Find blob size. Assume every string is D-aligned in its bucket region.
   size_t blob_bytes = 0;
+  for (auto sv : tld_domains) {
+    size_t s_len = sv.size() + 1;  // 0x00 in the end
+    blob_bytes += round_up16(s_len);
+  }
   for (auto sv : popular_suffixes) {
     size_t s_len = sv.size() + 1;  // 0x00 in the end
     blob_bytes += round_up16(s_len);
   }
-  for (auto sv : domains_views) {
+  for (auto sv : regular_domains) {
     size_t domain_len = sv.size() + 1;  // 0x00 byte in the end.
     blob_bytes += round_up16(domain_len);
   }
   // Add space for memcmp inside scan_tags and general SIMD tail.
   blob_bytes += 256;
 
+  size_t tld_records = (tld_domains.size() + D - 1) / D;
+  size_t tld_bytes = tld_records * sizeof(domains_table_record_t);
   size_t popular_records = (popular_suffixes.size() + D - 1) / D;
   size_t popular_bytes = popular_records * sizeof(domains_table_record_t);
   size_t table_bytes = buckets_num * sizeof(domains_table_record_t);
 
-  return sizeof(hm_domain_database_t) + table_bytes + popular_bytes +
-         blob_bytes + 2 * kAlignHeadroom;
+  return round_up64(sizeof(hm_domain_database_t)) + tld_bytes + popular_bytes +
+         table_bytes + blob_bytes + 2 * ALIGN_HEADROOM;
 }
 
 extern "C" hm_error_t HM_CDECL hm_domain_compile(char* db_place,
@@ -583,23 +819,21 @@ extern "C" hm_error_t HM_CDECL hm_domain_compile(char* db_place,
     return HM_ERROR_BAD_VALUE;
   }
 
-  // Reject top-level domains (no dot) since the fast path cuts by labels
-  // starting from the last two components.
-  for (const auto& sv : domains_views) {
-    if (memchr(sv.data(), '.', sv.size()) == nullptr) {
-      return HM_ERROR_TOP_LEVEL_DOMAIN;
-    }
-  }
+  std::vector<std::string_view> regular_domains;
+  std::vector<std::string_view> tld_domains;
+  split_regular_and_tld_domains(domains_views, regular_domains, tld_domains);
 
   debugf("[compile] inputs=%u after-preprocess=%zu\n", elements,
          domains_views.size());
+  debugf("[compile] regular=%zu tld=%zu\n", regular_domains.size(),
+         tld_domains.size());
   for (size_t i = 0; i < domains_views.size(); i++) {
     const auto& sv = domains_views[i];
     debugf("[compile]   domain[%zu]=%.*s\n", i, (int)sv.size(), sv.data());
   }
 
   // Find popular suffixes and check that their number is not too high.
-  auto popular_suffixes = find_popular_suffixes(domains_views);
+  auto popular_suffixes = find_popular_suffixes(regular_domains);
   if (popular_suffixes.size() > MAX_POPULAR_SUFFIXES) {
     return HM_ERROR_TOO_MANY_POPULAR_DOMAINS;
   }
@@ -612,9 +846,10 @@ extern "C" hm_error_t HM_CDECL hm_domain_compile(char* db_place,
 
   // Now calibrate the table to fit all the domains.
   calibration_result_t calib;
-  if (!calibrate_and_build_preview(domains_views, popular_suffixes, calib)) {
-    return HM_ERROR_BAD_VALUE;
+  if (!calibrate_and_build_preview(regular_domains, popular_suffixes, calib)) {
+    return HM_ERROR_FAILED_TO_CALIBRATE;
   }
+  calib.tld_domains = tld_domains;
 
   debugf("[compile] calibrated: buckets=%zu seed=0x%08x popular_count=%zu\n",
          calib.preview_buckets.size(), calib.seed,
@@ -653,11 +888,19 @@ hm_domain_popular_count(const hm_domain_database_t* db) {
 }
 
 extern "C" uint32_t HM_CDECL
+hm_domain_tld_count(const hm_domain_database_t* db) {
+  if (!db) {
+    return 0;
+  }
+  return (uint32_t)db->tld_count;
+}
+
+extern "C" uint32_t HM_CDECL
 hm_domain_used_total(const hm_domain_database_t* db) {
   if (!db) {
     return 0;
   }
-  uint32_t total = 0;
+  uint32_t total = db->tld_count;
   for (uint32_t b = 0; b < db->buckets; b++) {
     total += db->domains_table[b].used_slots;
   }
@@ -673,7 +916,7 @@ hm_domain_hash_seed(const hm_domain_database_t* db) {
 }
 
 extern "C" size_t HM_CDECL hm_domain_header_bytes() {
-  return round_up64(sizeof(hm_domain_database_t));
+  return SERIALIZED_HEADER_BYTES;
 }
 
 extern "C" size_t HM_CDECL
@@ -682,6 +925,13 @@ hm_domain_table_bytes(const hm_domain_database_t* db) {
     return 0;
   }
   return (size_t)db->buckets * sizeof(domains_table_record_t);
+}
+
+extern "C" size_t HM_CDECL hm_domain_tld_bytes(const hm_domain_database_t* db) {
+  if (!db) {
+    return 0;
+  }
+  return (size_t)db->tld_records * sizeof(domains_table_record_t);
 }
 
 extern "C" size_t HM_CDECL
@@ -700,34 +950,28 @@ hm_domain_blob_bytes(const hm_domain_database_t* db) {
   return db->domains_blob_size;
 }
 
-// Serialized form is:
-// [4-byte magic] [64-byte canonical header] [popular records] [bucket records]
-// [domains blob].
+// Serialized form (v2) is:
+// [4-byte magic] [64-byte header] [tld records] [popular records]
+// [bucket records] [domains blob].
 //
-// Pointer fields in header/records are not persisted and are written as zeroes
-// to keep the format deterministic across runs and process layouts.
-
+// Pointer fields in records are canonicalized to zero while writing to keep
+// serialized output deterministic across runs and process layouts.
 extern "C" size_t HM_CDECL
 hm_domain_serialized_size(const hm_domain_database_t* db) {
   if (!db) {
     return 0;
   }
-  size_t size = 0;
-
-  // Magic.
-  size += 4;
-
-  const char* begin = (const char*)(db);
-  const char* end = db->domains_blob + db->domains_blob_size;
-
-  size += (end - begin);
-
-  return size;
+  size_t tld_bytes = (size_t)db->tld_records * sizeof(domains_table_record_t);
+  size_t popular_bytes =
+      (size_t)db->popular_records * sizeof(domains_table_record_t);
+  size_t table_bytes = (size_t)db->buckets * sizeof(domains_table_record_t);
+  return 4 + SERIALIZED_HEADER_BYTES + tld_bytes + popular_bytes + table_bytes +
+         db->domains_blob_size;
 }
 
 extern "C" hm_error_t HM_CDECL hm_domain_serialize(
     char* buffer, size_t buffer_size, const hm_domain_database_t* db) {
-  if (!db) {
+  if (!db || !buffer) {
     return HM_ERROR_BAD_VALUE;
   }
   size_t need = hm_domain_serialized_size(db);
@@ -735,51 +979,53 @@ extern "C" hm_error_t HM_CDECL hm_domain_serialize(
     return HM_ERROR_SMALL_PLACE;
   }
 
-  const size_t hdr_bytes = round_up64(sizeof(hm_domain_database_t));
-  const size_t popular_bytes =
+  size_t tld_bytes = (size_t)db->tld_records * sizeof(domains_table_record_t);
+  size_t popular_bytes =
       (size_t)db->popular_records * sizeof(domains_table_record_t);
-  const size_t table_bytes =
-      (size_t)db->buckets * sizeof(domains_table_record_t);
-  const size_t payload_bytes =
-      hdr_bytes + popular_bytes + table_bytes + db->domains_blob_size;
+  size_t table_bytes = (size_t)db->buckets * sizeof(domains_table_record_t);
+  size_t payload_bytes = SERIALIZED_HEADER_BYTES + tld_bytes + popular_bytes +
+                         table_bytes + db->domains_blob_size;
   if (need != 4 + payload_bytes) {
     return HM_ERROR_BAD_VALUE;
   }
+  if ((db->tld_records > 0 && !db->tld_table) ||
+      (db->popular_records > 0 && !db->popular_table) ||
+      (db->buckets > 0 && !db->domains_table) || !db->domains_blob) {
+    return HM_ERROR_BAD_VALUE;
+  }
 
-  uint32_t magic = STATIC_DOMAIN_SET_MAGIC;
-  memcpy(buffer, &magic, sizeof(magic));
-  buffer += sizeof(magic);
+  write_u32(buffer, STATIC_DOMAIN_SET_MAGIC_V2);
+  char* hdr = buffer + 4;
+  memset(hdr, 0, SERIALIZED_HEADER_BYTES);
+  write_u64(hdr + 0, db->fastmod_M);
+  write_u32(hdr + 8, db->buckets);
+  write_u32(hdr + 12, db->hash_seed);
+  write_u32(hdr + 16, db->popular_records);
+  write_u32(hdr + 20, db->popular_count);
+  write_u32(hdr + 24, db->tld_records);
+  write_u32(hdr + 28, db->tld_count);
+  write_u64(hdr + 32, (uint64_t)db->domains_blob_size);
 
-  // Write canonical header (pointer fields left zero).
-  hm_domain_database_t hdr = {};
-  hdr.fastmod_M = db->fastmod_M;
-  hdr.buckets = db->buckets;
-  hdr.hash_seed = db->hash_seed;
-  hdr.popular_records = db->popular_records;
-  hdr.popular_count = db->popular_count;
-  hdr.domains_blob_size = db->domains_blob_size;
-  memset(buffer, 0, hdr_bytes);
-  memcpy(buffer, &hdr, sizeof(hdr));
-  buffer += hdr_bytes;
-
-  // Write popular table records with pointer field canonicalized to zero.
+  char* p = hdr + SERIALIZED_HEADER_BYTES;
+  for (uint32_t i = 0; i < db->tld_records; i++) {
+    domains_table_record_t rec = db->tld_table[i];
+    rec.domains_blob = nullptr;
+    memcpy(p, &rec, sizeof(rec));
+    p += sizeof(rec);
+  }
   for (uint32_t i = 0; i < db->popular_records; i++) {
     domains_table_record_t rec = db->popular_table[i];
     rec.domains_blob = nullptr;
-    memcpy(buffer, &rec, sizeof(rec));
-    buffer += sizeof(rec);
+    memcpy(p, &rec, sizeof(rec));
+    p += sizeof(rec);
   }
-
-  // Write main table records with pointer field canonicalized to zero.
   for (uint32_t i = 0; i < db->buckets; i++) {
     domains_table_record_t rec = db->domains_table[i];
     rec.domains_blob = nullptr;
-    memcpy(buffer, &rec, sizeof(rec));
-    buffer += sizeof(rec);
+    memcpy(p, &rec, sizeof(rec));
+    p += sizeof(rec);
   }
-
-  memcpy(buffer, db->domains_blob, db->domains_blob_size);
-
+  memcpy(p, db->domains_blob, db->domains_blob_size);
   return HM_SUCCESS;
 }
 
@@ -788,58 +1034,78 @@ extern "C" hm_error_t HM_CDECL hm_domain_db_place_size_from_serialized(
   if (!db_place_size) {
     return HM_ERROR_BAD_VALUE;
   }
-  if (buffer_size < 4 + 64) {
+  if (buffer_size < 4 + SERIALIZED_HEADER_BYTES) {
     return HM_ERROR_SMALL_PLACE;
   }
-  const char* p = buffer;
-  uint32_t magic;
-  memcpy(&magic, p, sizeof(magic));
-  if (magic != STATIC_DOMAIN_SET_MAGIC) {
+  serialized_meta_t meta;
+  if (!parse_serialized_meta(buffer, buffer_size, &meta)) {
     return HM_ERROR_BAD_VALUE;
   }
-  p += 4;
-  // Header is hm_domain_database_t padded to 64 bytes in serialized form.
-  hm_domain_database_t hdr = {};
-  memcpy(&hdr, p, sizeof(hdr) <= 64 ? sizeof(hdr) : 64);
-  p += 64;
-  size_t buckets = hdr.buckets;
-  size_t popular_records = hdr.popular_records;
-  size_t blob_bytes = hdr.domains_blob_size;
-  if (blob_bytes % 16 != 0) {
+  if (meta.blob_bytes % 16 != 0 || meta.blob_bytes < 256) {
     return HM_ERROR_BAD_VALUE;
   }
-  if (blob_bytes < 256) {
+  if (meta.buckets == 0) {
     return HM_ERROR_BAD_VALUE;
   }
-  // Basic sanity checks
-  if (buckets > (SIZE_MAX / sizeof(domains_table_record_t))) {
+  if (meta.blob_bytes > (uint64_t)SIZE_MAX) {
     return HM_ERROR_BAD_VALUE;
   }
-  size_t table_bytes = buckets * sizeof(domains_table_record_t);
-  size_t popular_bytes = popular_records * sizeof(domains_table_record_t);
+  if (meta.buckets > (SIZE_MAX / sizeof(domains_table_record_t))) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  if (meta.popular_records > (SIZE_MAX / sizeof(domains_table_record_t))) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  if (meta.tld_records > (SIZE_MAX / sizeof(domains_table_record_t))) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  if ((uint64_t)meta.popular_count > (uint64_t)meta.popular_records * D) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  if ((uint64_t)meta.tld_count > (uint64_t)meta.tld_records * D) {
+    return HM_ERROR_BAD_VALUE;
+  }
 
-  size_t total_bytes_after_header = table_bytes + popular_bytes + blob_bytes;
+  size_t table_bytes = 0;
+  size_t popular_bytes = 0;
+  size_t tld_bytes = 0;
+  if (mul_size_overflow((size_t)meta.buckets, sizeof(domains_table_record_t),
+                        &table_bytes) ||
+      mul_size_overflow((size_t)meta.popular_records,
+                        sizeof(domains_table_record_t), &popular_bytes) ||
+      mul_size_overflow((size_t)meta.tld_records, sizeof(domains_table_record_t),
+                        &tld_bytes)) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  size_t blob_bytes = (size_t)meta.blob_bytes;
+  size_t total_bytes_after_header = 0;
+  if (add_size_overflow(tld_bytes, popular_bytes, &total_bytes_after_header) ||
+      add_size_overflow(total_bytes_after_header, table_bytes,
+                        &total_bytes_after_header) ||
+      add_size_overflow(total_bytes_after_header, blob_bytes,
+                        &total_bytes_after_header)) {
+    return HM_ERROR_BAD_VALUE;
+  }
 
-  size_t place_left = buffer_size - (size_t)(p - buffer);
+  size_t place_left = buffer_size - (4 + SERIALIZED_HEADER_BYTES);
   if (place_left < total_bytes_after_header) {
     return HM_ERROR_SMALL_PLACE;
   }
 
-  // Compute required db_place size with extra alignment headroom, similar to
-  // hm_domain_db_place_size: callers may pass an arbitrary base pointer which
-  // we realign inside hm_domain_deserialize. Provide headroom to keep the
-  // aligned destination within the allocated buffer and to tolerate minor
-  // overreads by SIMD.
-  *db_place_size = round_up64(sizeof(hm_domain_database_t)) +
-                   total_bytes_after_header + 2 * ALIGN_HEADROOM;
-
+  size_t out = 0;
+  if (add_size_overflow(round_up64(sizeof(hm_domain_database_t)),
+                        total_bytes_after_header, &out) ||
+      add_size_overflow(out, (size_t)2 * ALIGN_HEADROOM, &out)) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  *db_place_size = out;
   return HM_SUCCESS;
 }
 
 extern "C" hm_error_t HM_CDECL hm_domain_deserialize(
     char* db_place, size_t db_place_size, hm_domain_database_t** db_ptr,
     const char* buffer, size_t buffer_size) {
-  if (!db_place || !db_ptr) {
+  if (!db_place || !db_ptr || !buffer) {
     return HM_ERROR_BAD_VALUE;
   }
   size_t need = 0;
@@ -852,32 +1118,37 @@ extern "C" hm_error_t HM_CDECL hm_domain_deserialize(
     return HM_ERROR_SMALL_PLACE;
   }
 
-  const char* src = buffer;
-  if (buffer_size < 4 + 64) {
-    return HM_ERROR_SMALL_PLACE;
-  }
-  uint32_t magic;
-  memcpy(&magic, src, sizeof(magic));
-  if (magic != STATIC_DOMAIN_SET_MAGIC) {
+  serialized_meta_t meta;
+  if (!parse_serialized_meta(buffer, buffer_size, &meta)) {
     return HM_ERROR_BAD_VALUE;
   }
-  src += 4;
-  hm_domain_database_t hdr = {};
-  memcpy(&hdr, src, sizeof(hdr) <= 64 ? sizeof(hdr) : 64);
-  src += round_up64(sizeof(hm_domain_database_t));
 
-  uint32_t buckets = hdr.buckets;
-  uint32_t popular_records = hdr.popular_records;
-  uint32_t blob_bytes = hdr.domains_blob_size;
-  uint64_t fastmod_M = hdr.fastmod_M;
-  uint32_t seed = hdr.hash_seed;
-
-  size_t table_bytes = (size_t)buckets * sizeof(domains_table_record_t);
-  size_t popular_bytes =
-      (size_t)popular_records * sizeof(domains_table_record_t);
-  // Bounds check source buffer
-  if ((size_t)(src - buffer) + table_bytes + popular_bytes + blob_bytes >
-      buffer_size) {
+  const char* src = buffer + 4 + SERIALIZED_HEADER_BYTES;
+  size_t table_bytes = 0;
+  size_t popular_bytes = 0;
+  size_t tld_bytes = 0;
+  if (mul_size_overflow((size_t)meta.buckets, sizeof(domains_table_record_t),
+                        &table_bytes) ||
+      mul_size_overflow((size_t)meta.popular_records,
+                        sizeof(domains_table_record_t), &popular_bytes) ||
+      mul_size_overflow((size_t)meta.tld_records, sizeof(domains_table_record_t),
+                        &tld_bytes)) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  if (meta.blob_bytes > (uint64_t)SIZE_MAX) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  size_t blob_bytes = (size_t)meta.blob_bytes;
+  size_t serialized_after_header = 0;
+  if (add_size_overflow(tld_bytes, popular_bytes, &serialized_after_header) ||
+      add_size_overflow(serialized_after_header, table_bytes,
+                        &serialized_after_header) ||
+      add_size_overflow(serialized_after_header, blob_bytes,
+                        &serialized_after_header)) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  size_t hdr_off = (size_t)(src - buffer);
+  if (hdr_off > buffer_size || serialized_after_header > buffer_size - hdr_off) {
     return HM_ERROR_SMALL_PLACE;
   }
 
@@ -887,67 +1158,99 @@ extern "C" hm_error_t HM_CDECL hm_domain_deserialize(
     return HM_ERROR_SMALL_PLACE;
   }
   char* dst = base;
+  memset(dst, 0, round_up64(sizeof(hm_domain_database_t)));
   hm_domain_database_t* db = (hm_domain_database_t*)dst;
   *db_ptr = db;
-  db->buckets = buckets;
-  db->fastmod_M = fastmod_M;
-  db->hash_seed = seed;
-  db->popular_count = hdr.popular_count;
+  db->buckets = meta.buckets;
+  db->fastmod_M = meta.fastmod_M;
+  db->hash_seed = meta.hash_seed;
+  db->popular_count = meta.popular_count;
+  db->tld_count = meta.tld_count;
   dst += round_up64(sizeof(hm_domain_database_t));
 
-  // Popular table first in the serialized buffer after header
-  db->popular_table = (domains_table_record_t*)dst;
-  db->popular_records = popular_records;
-  memcpy(db->popular_table, src, popular_bytes);
-  src += popular_bytes;
-  dst += popular_bytes;
+  if (meta.is_v2) {
+    db->tld_records = meta.tld_records;
+    if (tld_bytes > 0) {
+      db->tld_table = (domains_table_record_t*)dst;
+      memcpy(db->tld_table, src, tld_bytes);
+      src += tld_bytes;
+      dst += tld_bytes;
+    } else {
+      db->tld_table = nullptr;
+    }
 
-  // Then domains table
-  db->domains_table = (domains_table_record_t*)dst;
-  memcpy(db->domains_table, src, table_bytes);
-  src += table_bytes;
-  dst += table_bytes;
+    db->popular_records = meta.popular_records;
+    if (popular_bytes > 0) {
+      db->popular_table = (domains_table_record_t*)dst;
+      memcpy(db->popular_table, src, popular_bytes);
+      src += popular_bytes;
+      dst += popular_bytes;
+    } else {
+      db->popular_table = nullptr;
+    }
+  } else {
+    // v1 serialized layout has no TLD table and stores popular first.
+    db->tld_records = 0;
+    db->tld_table = nullptr;
+
+    db->popular_records = meta.popular_records;
+    if (popular_bytes > 0) {
+      db->popular_table = (domains_table_record_t*)dst;
+      memcpy(db->popular_table, src, popular_bytes);
+      src += popular_bytes;
+      dst += popular_bytes;
+    } else {
+      db->popular_table = nullptr;
+    }
+  }
+
+  if (table_bytes > 0) {
+    db->domains_table = (domains_table_record_t*)dst;
+    memcpy(db->domains_table, src, table_bytes);
+    src += table_bytes;
+    dst += table_bytes;
+  } else {
+    db->domains_table = nullptr;
+  }
 
   db->domains_blob = (char*)dst;
   db->domains_blob_size = blob_bytes;
   memcpy(db->domains_blob, src, blob_bytes);
-  src += blob_bytes;
-  dst += blob_bytes;
 
-  // Rebuild per-record base pointers and validate offsets.
-  for (uint32_t b = 0; b < buckets; b++) {
-    domains_table_record_t* rec = &db->domains_table[b];
-    size_t base_off = rec->domains_blob_offset;
-    if (base_off > db->domains_blob_size) {
-      return HM_ERROR_BAD_VALUE;
+  auto rebuild_table = [&](domains_table_record_t* recs,
+                           uint32_t rec_count) -> bool {
+    if (!recs || rec_count == 0) {
+      return true;
     }
-    rec->domains_blob = db->domains_blob + base_off;
-
-    // Validate item offsets and NUL terminators inside blob bounds.
-    for (uint32_t i = 0; i < rec->used_slots; i++) {
-      size_t off_units = (size_t)rec->domains_offsets[i];
-      size_t pos = base_off + off_units * D;
-      if (pos + MAX_DOMAIN_LEN >= db->domains_blob_size) {
-        return HM_ERROR_BAD_VALUE;
+    for (uint32_t r = 0; r < rec_count; r++) {
+      domains_table_record_t* rec = &recs[r];
+      if (rec->used_slots > D) {
+        return false;
+      }
+      size_t base_off = rec->domains_blob_offset;
+      if (base_off > db->domains_blob_size) {
+        return false;
+      }
+      rec->domains_blob = db->domains_blob + base_off;
+      for (uint32_t i = 0; i < rec->used_slots; i++) {
+        size_t off_units = (size_t)rec->domains_offsets[i];
+        size_t pos = base_off + off_units * D;
+        if (pos + MAX_DOMAIN_LEN >= db->domains_blob_size) {
+          return false;
+        }
       }
     }
+    return true;
+  };
+
+  if (!rebuild_table(db->domains_table, db->buckets)) {
+    return HM_ERROR_BAD_VALUE;
   }
-
-  // Rebuild popular table base pointers and validate offsets.
-  for (uint32_t r = 0; r < db->popular_records; r++) {
-    domains_table_record_t* rec = &db->popular_table[r];
-    size_t base_off = rec->domains_blob_offset;
-    if (base_off > db->domains_blob_size) {
-      return HM_ERROR_BAD_VALUE;
-    }
-    rec->domains_blob = db->domains_blob + base_off;
-    for (uint32_t i = 0; i < rec->used_slots; i++) {
-      size_t off_units = (size_t)rec->domains_offsets[i];
-      size_t pos = base_off + off_units * D;
-      if (pos + MAX_DOMAIN_LEN >= db->domains_blob_size) {
-        return HM_ERROR_BAD_VALUE;
-      }
-    }
+  if (!rebuild_table(db->popular_table, db->popular_records)) {
+    return HM_ERROR_BAD_VALUE;
+  }
+  if (!rebuild_table(db->tld_table, db->tld_records)) {
+    return HM_ERROR_BAD_VALUE;
   }
 
   return HM_SUCCESS;

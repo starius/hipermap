@@ -6,12 +6,14 @@ import (
 )
 
 func BenchmarkFind(b *testing.B) {
-	ds, err := Compile(sampleDomainStrings)
+	domains := append([]string{}, sampleDomainStrings...)
+	domains = append(domains, "com", "info")
+	ds, err := Compile(domains)
 	if err != nil {
 		b.Fatalf("Compile: %v", err)
 	}
 
-	queries := buildFindBenchmarkQueries(b, ds, sampleDomainStrings)
+	queries := buildFindBenchmarkQueries(b, ds, domains)
 	if len(queries) == 0 {
 		b.Fatal("no benchmark queries")
 	}
@@ -58,6 +60,50 @@ func buildFindBenchmarkQueries(tb testing.TB, ds *StaticDomainSet, bases []strin
 			if candidate == "" {
 				continue
 			}
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			if _, err := ds.Find(candidate); err != nil {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			queries = append(queries, candidate)
+		}
+	}
+
+	// Ensure benchmark mix exercises the TLD-first branch.
+	tlds := make(map[string]struct{})
+	for _, base := range bases {
+		if base != "" && !strings.Contains(base, ".") {
+			tlds[base] = struct{}{}
+		}
+	}
+	for tld := range tlds {
+		candidates := []string{
+			tld,
+			"bench." + tld,
+			"deep.bench." + tld,
+		}
+		for _, candidate := range candidates {
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			if _, err := ds.Find(candidate); err != nil {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			queries = append(queries, candidate)
+		}
+	}
+	if len(tlds) > 0 {
+		missTLD := "zzzznotld"
+		for {
+			if _, ok := tlds[missTLD]; !ok {
+				break
+			}
+			missTLD += "x"
+		}
+		for _, candidate := range []string{"bench." + missTLD, "deep.bench." + missTLD} {
 			if _, ok := seen[candidate]; ok {
 				continue
 			}

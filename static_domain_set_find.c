@@ -414,6 +414,23 @@ static inline bool popular_suffix_exists(const hm_domain_database_t* db,
   return false;
 }
 
+// Check if the given one-label suffix (TLD) exists in tld_table.
+static inline bool tld_suffix_exists(const hm_domain_database_t* db,
+                                     uint16_t tag, const char* suffix,
+                                     size_t suffix_len) {
+  uint32_t rnum = db->tld_records;
+  if (rnum == 0) {
+    return false;
+  }
+  const domains_table_record_t* recs = db->tld_table;
+  for (uint32_t r = 0; r < rnum; r++) {
+    if (scan_tags(&recs[r], tag, suffix, suffix_len)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 int HM_CDECL hm_domain_find(const hm_domain_database_t* db, const char* domain,
                             size_t domain_len) {
   debugf("[find] === query '%.*s' ===\n", (int)domain_len, domain);
@@ -457,6 +474,17 @@ int HM_CDECL hm_domain_find(const hm_domain_database_t* db, const char* domain,
   zero_pad_32(domain_end);
 
   debugf("[find]   lower='%.*s'\n", (int)domain_len, domain_lower);
+
+  // TLD-first fast path: check if the last label itself is present in
+  // tld_table (e.g. "com"), which covers the whole zone.
+  const char* tld_suffix = cut_last_domain_label_fast(domain_lower, domain_end);
+  size_t tld_len = (size_t)(domain_end - tld_suffix);
+  uint64_t tld_hash = hash64_span_ci(tld_suffix, tld_len, db->hash_seed);
+  uint16_t tld_tag = (uint16_t)((tld_hash >> 32) & 0xFFFFu);
+  if (tld_suffix_exists(db, tld_tag, tld_suffix, tld_len)) {
+    debugf("[find]   tld match: '%.*s'\n", (int)tld_len, tld_suffix);
+    return 1;
+  }
 
   // Cut last two components. If there is just one component, cut only it.
   const char* suffix =

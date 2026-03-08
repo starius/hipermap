@@ -74,15 +74,31 @@ typedef struct hm_domain_database {
   // domains_table is the hash table (array of 64-byte records).
   domains_table_record_t* domains_table;
 
+  // tld_table holds top-level domains (single-label entries like "com")
+  // using the same 64-byte record layout as domains_table.
+  domains_table_record_t* tld_table;
+
+  // tld_records is the number of records in tld_table.
+  uint32_t tld_records;
+
+  // tld_count is the number of stored top-level domains.
+  uint32_t tld_count;
+
   // popular_table holds popular suffixes using the same 64-byte record layout
   // as domains_table. Suffix strings are stored at the beginning of
   // domains_blob. We keep the number of records and total suffix count.
   domains_table_record_t* popular_table;
+
+  // popular_records is the number of records in popular_table.
   uint32_t popular_records;
+
+  // popular_count is the number of popular suffix strings.
   uint32_t popular_count;
 
   // domains_blob is concatenated, D-byte-aligned strings storage.
   char* domains_blob;
+
+  // domains_blob_size is the number of bytes used by domains_blob.
   size_t domains_blob_size;
 } hm_domain_database_t;
 

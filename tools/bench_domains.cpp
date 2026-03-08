@@ -4,6 +4,7 @@
 //                 -text=text.csv [-n=10] [-naive_n=2]
 // Reads patterns (one domain per line; keeps up to first whitespace) or a
 // serialized domain DB,
+//               [-tld_cases=0]
 // and a text file with lines like "<url>,<count>"; extracts hostnames.
 // Builds the optimized C++ static domain set and a naive C++ matcher.
 // Runs N passes over all text domains calling find and times total duration.
@@ -56,7 +57,7 @@ static const char* hm_err_to_str(hm_error_t e) {
     case HM_ERROR_FAILED_TO_CALIBRATE:
       return "failed to calibrate";
     case HM_ERROR_TOP_LEVEL_DOMAIN:
-      return "top-level domains are not supported";
+      return "deprecated top-level-domain error";
     default:
       return "unknown error";
   }
@@ -237,6 +238,57 @@ bool read_text_hosts(const std::string& path, std::vector<std::string>& hosts,
   return true;
 }
 
+// append_tld_benchmark_queries injects deterministic TLD-hit and TLD-miss
+// queries so benchmark runs exercise the TLD-first lookup branch.
+void append_tld_benchmark_queries(const std::vector<std::string>& patterns,
+                                  std::vector<std::string>& hosts) {
+  std::unordered_set<std::string> tlds;
+  tlds.reserve(patterns.size());
+  for (const auto& p : patterns) {
+    if (!p.empty() && p.find('.') == std::string::npos) {
+      tlds.insert(p);
+    }
+  }
+  if (tlds.empty()) {
+    return;
+  }
+
+  std::unordered_set<std::string> seen(hosts.begin(), hosts.end());
+  size_t added_hits = 0;
+  for (const auto& tld : tlds) {
+    std::string q1 = std::string("bench.") + tld;
+    if (seen.insert(q1).second) {
+      hosts.push_back(std::move(q1));
+      added_hits++;
+    }
+    std::string q2 = std::string("deep.bench.") + tld;
+    if (seen.insert(q2).second) {
+      hosts.push_back(std::move(q2));
+      added_hits++;
+    }
+  }
+
+  std::string miss_tld = "zzzznotld";
+  while (tlds.find(miss_tld) != tlds.end()) {
+    miss_tld.push_back('x');
+  }
+  size_t added_miss = 0;
+  std::string m1 = std::string("bench.") + miss_tld;
+  if (seen.insert(m1).second) {
+    hosts.push_back(std::move(m1));
+    added_miss++;
+  }
+  std::string m2 = std::string("deep.bench.") + miss_tld;
+  if (seen.insert(m2).second) {
+    hosts.push_back(std::move(m2));
+    added_miss++;
+  }
+
+  std::cout << "Injected TLD benchmark queries: hits=" << added_hits
+            << ", misses=" << added_miss << ", tld_patterns=" << tlds.size()
+            << std::endl;
+}
+
 // Naive matcher: any whole-label suffix match, case-insensitive; validates
 // input.
 static inline bool is_valid_domain_char(unsigned char c) {
@@ -347,6 +399,18 @@ int main(int argc, char** argv) {
   int N_naive = 2;
   int N_hs = 4;  // default Hyperscan attempts
   bool add_pathological = false;
+  bool add_tld_cases = false;
+
+  auto print_usage = [&]() {
+    std::fprintf(stderr,
+                 "usage: bench_domains "
+                 "(-patterns=patterns.txt | -patterns-bin=patterns.bin) "
+                 "-text=text.csv "
+                 "[-n=%d] [-naive_n=%d] [-hs_n=%d] [-pathological=%d] "
+                 "[-tld_cases=%d]\n",
+                 N, N_naive, N_hs, add_pathological ? 1 : 0,
+                 add_tld_cases ? 1 : 0);
+  };
 
   // Simple flag parsing
   for (int i = 1; i < argc; ++i) {
@@ -376,12 +440,12 @@ int main(int argc, char** argv) {
       add_pathological = true;
     } else if (strncmp(a, "-pathological=", 14) == 0) {
       add_pathological = std::atoi(a + 14) != 0;
+    } else if (strcmp(a, "-tld_cases") == 0) {
+      add_tld_cases = true;
+    } else if (strncmp(a, "-tld_cases=", 11) == 0) {
+      add_tld_cases = std::atoi(a + 11) != 0;
     } else if ((strcmp(a, "-h") == 0) || (strcmp(a, "--help") == 0)) {
-      std::fprintf(stderr,
-                   "usage: bench_domains "
-                   "(-patterns=patterns.txt | -patterns-bin=patterns.bin) "
-                   "-text=text.csv "
-                   "[-n=10] [-naive_n=2] [-hs_n=4] [-pathological]\n");
+      print_usage();
       return 2;
     } else {
       std::fprintf(stderr, "unknown arg: %s\n", a);
@@ -390,11 +454,13 @@ int main(int argc, char** argv) {
   }
   if (text_path.empty() ||
       (patterns_path.empty() == patterns_bin_path.empty())) {
+    print_usage();
+    return 2;
+  }
+  if (!patterns_bin_path.empty() && add_tld_cases) {
     std::fprintf(stderr,
-                 "usage: bench_domains "
-                 "(-patterns=patterns.txt | -patterns-bin=patterns.bin) "
-                 "-text=text.csv "
-                 "[-n=10] [-naive_n=2] [-hs_n=4] [-pathological]\n");
+                 "error: -tld_cases requires -patterns and cannot be used with "
+                 "-patterns-bin\n");
     return 2;
   }
 
@@ -431,6 +497,10 @@ int main(int argc, char** argv) {
   std::cout << "Loaded hosts: " << hosts.size()
             << (add_pathological ? " (with pathological prefixes)" : "")
             << std::endl;
+  if (add_tld_cases) {
+    append_tld_benchmark_queries(patterns, hosts);
+    std::cout << "Hosts after TLD augmentation: " << hosts.size() << std::endl;
+  }
 
   // Build/deserialize fast DB.
   std::cout << "Preparing fast DB..." << std::endl;
@@ -454,10 +524,16 @@ int main(int argc, char** argv) {
   std::cout << (has_raw_patterns ? "Compiled fast DB. "
                                  : "Deserialized fast DB. ")
             << "buckets=" << hm_domain_buckets(fast.db)
+            << " tlds=" << hm_domain_tld_count(fast.db)
             << " popular=" << hm_domain_popular_count(fast.db)
             << " used_total=" << hm_domain_used_total(fast.db) << " seed=0x"
             << std::hex << hm_domain_hash_seed(fast.db) << std::dec
             << " serialized_size=" << hm_domain_serialized_size(fast.db)
+            << " bytes(header=" << hm_domain_header_bytes()
+            << ", tld=" << hm_domain_tld_bytes(fast.db)
+            << ", popular=" << hm_domain_popular_bytes(fast.db)
+            << ", table=" << hm_domain_table_bytes(fast.db)
+            << ", domains=" << hm_domain_blob_bytes(fast.db) << ")"
             << std::endl;
   std::cout << "Preparing queries..." << std::endl;
   std::vector<const char*> qptrs;

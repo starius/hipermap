@@ -33,6 +33,7 @@ size_t HM_CDECL hm_domain_db_place_size(const char** domains,
 // successfull call db_ptr points to a pointer to hm_domain_database_t
 // structure, which can be used in hm_domain_find calls. Keys must be unique and
 // "" is not allowed as key, otherwise HM_ERROR_BAD_VALUE is returned.
+// Top-level domains like "com" are supported and match the whole domain zone.
 // This type uses popular domains optimizations and has an upper limit on the
 // number of popular domain suffixes: 256. Otherwise it returns error
 // HM_ERROR_TOO_MANY_POPULAR_DOMAINS.
@@ -94,10 +95,12 @@ size_t HM_CDECL hm_cut_last_domain_label_offset(const char* domain, size_t len);
 // Lightweight getters for summary information used by Go bindings.
 uint32_t HM_CDECL hm_domain_buckets(const hm_domain_database_t* db);
 uint32_t HM_CDECL hm_domain_popular_count(const hm_domain_database_t* db);
+uint32_t HM_CDECL hm_domain_tld_count(const hm_domain_database_t* db);
 uint32_t HM_CDECL hm_domain_used_total(const hm_domain_database_t* db);
 uint32_t HM_CDECL hm_domain_hash_seed(const hm_domain_database_t* db);
 size_t HM_CDECL hm_domain_header_bytes();
 size_t HM_CDECL hm_domain_table_bytes(const hm_domain_database_t* db);
+size_t HM_CDECL hm_domain_tld_bytes(const hm_domain_database_t* db);
 size_t HM_CDECL hm_domain_popular_bytes(const hm_domain_database_t* db);
 size_t HM_CDECL hm_domain_blob_bytes(const hm_domain_database_t* db);
 

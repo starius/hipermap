@@ -11,5 +11,6 @@ var (
 	ErrBadValue              = fmt.Errorf("invalid domain list")
 	ErrTooManyPopularDomains = fmt.Errorf("too many popular domains")
 	ErrFailedToCalibrate     = fmt.Errorf("failed to calibrate")
-	ErrTopLevelDomain        = fmt.Errorf("top-level domains are not supported")
+	// Deprecated: top-level domains are supported in v2 serialized format and newer builds.
+	ErrTopLevelDomain = fmt.Errorf("top-level domains are not supported")
 )

@@ -12,7 +12,7 @@ The package exposes the following entry points:
 
 - `Compile(domains []string) (*StaticDomainSet, error)` builds a database from a
   slice of ASCII domains (trailing dots are normalised; top-level domains are
-  rejected).
+  supported).
 - `(s *StaticDomainSet) Find(domain string) (bool, error)` matches a query
   domain, returning true when any whole-label suffix is present.
 - `(s *StaticDomainSet) Serialize() ([]byte, error)` encodes the database into

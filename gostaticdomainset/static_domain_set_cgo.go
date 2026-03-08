@@ -145,13 +145,15 @@ func FromSerialized(buffer []byte) (*StaticDomainSet, error) {
 }
 
 // String returns a short summary of the database:
-// number of domains, number of popular hashes, fill percentage, and db_place_size.
+// number of domains, number of TLDs, number of popular hashes, fill percentage,
+// and db_place_size.
 func (m *StaticDomainSet) String() string {
 	if m == nil || m.db == nil {
 		return "StaticDomainSet{empty}"
 	}
 	// Query counts directly from C to avoid serialized header coupling.
 	buckets := int(C.hm_domain_buckets(m.db))
+	tldCount := int(C.hm_domain_tld_count(m.db))
 	popCount := int(C.hm_domain_popular_count(m.db))
 	usedTotal := int(C.hm_domain_used_total(m.db))
 	D := 16
@@ -166,10 +168,11 @@ func (m *StaticDomainSet) String() string {
 	usedBytes := int(C.hm_domain_serialized_size(m.db))
 	header := int(C.hm_domain_header_bytes())
 	table := int(C.hm_domain_table_bytes(m.db))
+	tld := int(C.hm_domain_tld_bytes(m.db))
 	popular := int(C.hm_domain_popular_bytes(m.db))
 	blob := int(C.hm_domain_blob_bytes(m.db))
-	return fmt.Sprintf("StaticDomainSet{domains=%d, popular_hashes=%d, fill=%.1f%%, used=%d (header=%d, popular=%d, table=%d, domains=%d)}",
-		usedTotal, popCount, fillPct, usedBytes, header, popular, table, blob)
+	return fmt.Sprintf("StaticDomainSet{domains=%d, tlds=%d, popular_hashes=%d, fill=%.1f%%, used=%d (header=%d, tld=%d, popular=%d, table=%d, domains=%d)}",
+		usedTotal, tldCount, popCount, fillPct, usedBytes, header, tld, popular, table, blob)
 }
 
 // Seed returns the internal hash seed used by the database calibration.
