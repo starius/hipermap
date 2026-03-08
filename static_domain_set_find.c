@@ -433,7 +433,13 @@ static inline bool tld_suffix_exists(const hm_domain_database_t* db,
 
 int HM_CDECL hm_domain_find(const hm_domain_database_t* db, const char* domain,
                             size_t domain_len) {
-  debugf("[find] === query '%.*s' ===\n", (int)domain_len, domain);
+#ifndef NDEBUG
+  size_t dbg_len = domain_len;
+  if (dbg_len > MAX_DOMAIN_LEN) {
+    dbg_len = MAX_DOMAIN_LEN;
+  }
+  debugf("[find] === query '%.*s' ===\n", (int)dbg_len, domain);
+#endif
   // compute on a lowercased copy below; pad 32 bytes before for AVX2 scans
 
   // Remove trailing '.'.
@@ -446,8 +452,14 @@ int HM_CDECL hm_domain_find(const hm_domain_database_t* db, const char* domain,
   // is in the end. No domain in the blob is longer than MAX_DOMAIN_LEN
   // anyway.
   if (domain_len > MAX_DOMAIN_LEN || domain_len == 0) {
-    debugf("[find] failure for domain '%.*s': len=%d\n", (int)domain_len,
-           domain, (int)domain_len);
+#ifndef NDEBUG
+    size_t bad_len = domain_len;
+    if (bad_len > MAX_DOMAIN_LEN) {
+      bad_len = MAX_DOMAIN_LEN;
+    }
+    debugf("[find] failure for domain '%.*s': len=%zu\n", (int)bad_len, domain,
+           domain_len);
+#endif
     return -1;
   }
 
