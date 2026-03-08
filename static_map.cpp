@@ -344,10 +344,8 @@ hm_sm_serialize(char* buffer, size_t buffer_size, const hm_sm_database_t* db) {
   memcpy(buffer, &db->list_size, sizeof(uint64_t));
   buffer += sizeof(uint64_t);
 
-  uint32_t* max_ips = reinterpret_cast<uint32_t*>(buffer);
-  for (int i = 0; i < db->list_size; i++) {
-    max_ips[i] = db->max_ips[i];
-  }
+  // Copy as bytes to avoid potential 4-byte misalignment of buffer.
+  memcpy(buffer, db->max_ips, sizeof(uint32_t) * db->list_size);
   buffer += sizeof(uint32_t) * db->list_size;
 
   // Copy values as bytes to avoid potential 8-byte misalignment of buffer.

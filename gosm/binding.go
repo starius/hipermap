@@ -99,6 +99,19 @@ func smDBPlaceSizeForTest(elements int) int {
 	return int(C.hm_sm_db_place_size(C.uint(elements)))
 }
 
+func smSerializedSizeForTest(m *StaticMap) int {
+	return int(C.hm_sm_serialized_size(m.db))
+}
+
+func smSerializeIntoBufferForTest(m *StaticMap, buffer []byte) int {
+	hmErr := C.hm_sm_serialize(
+		(*C.char)(unsafe.Pointer(&buffer[0])),
+		C.size_t(len(buffer)),
+		m.db,
+	)
+	return int(hmErr)
+}
+
 func smCompileWithPlaceSizeForTest(dbPlace []byte, declaredSize int, ips []uint32, cidrPrefixes []uint8, values []uint64) int {
 	var db *C.hm_sm_database_t
 	hmErr := C.hm_sm_compile(

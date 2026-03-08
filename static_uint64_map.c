@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef NDEBUG
 #define debugf(fmt, ...) \
@@ -297,20 +298,14 @@ hm_error_t HM_CDECL hm_u64map_serialize(char* buffer, size_t buffer_size,
   }
 
   uint64_t buckets = get_buckets(db);
-
-  uint64_t* dst = (uint64_t*)(buffer);
-  *dst = db->factor1;
-  dst++;
-  *dst = db->factor2;
-  dst++;
-  *dst = buckets;
+  uint64_t dummy = 0;
+  memcpy(buffer + 0 * sizeof(uint64_t), &db->factor1, sizeof(uint64_t));
+  memcpy(buffer + 1 * sizeof(uint64_t), &db->factor2, sizeof(uint64_t));
+  memcpy(buffer + 2 * sizeof(uint64_t), &buckets, sizeof(uint64_t));
+  memcpy(buffer + 3 * sizeof(uint64_t), &dummy, sizeof(uint64_t));
 
   buffer += 4 * sizeof(uint64_t);
-
-  key_value_t* hash_table2 = (key_value_t*)(buffer);
-  for (int i = 0; i < buckets; i++) {
-    hash_table2[i] = db->hash_table[i];
-  }
+  memcpy(buffer, db->hash_table, sizeof(key_value_t) * buckets);
 
   return HM_SUCCESS;
 }
@@ -321,14 +316,8 @@ hm_error_t HM_CDECL hm_u64map_db_place_size_from_serialized(
   if (buffer_size <= 4 * sizeof(uint64_t)) {
     return HM_ERROR_SMALL_PLACE;
   }
-
-  const uint64_t* src = (const uint64_t*)(buffer);
-
-  // Skip factor1 and factor2.
-  src++;
-  src++;
-
-  uint64_t buckets = *src;
+  uint64_t buckets = 0;
+  memcpy(&buckets, buffer + 2 * sizeof(uint64_t), sizeof(uint64_t));
 
   if (buckets == 0) {
     return HM_ERROR_NO_MASKS;
@@ -383,25 +372,19 @@ hm_error_t HM_CDECL hm_u64map_deserialize(char* db_place, size_t db_place_size,
     return HM_ERROR_SMALL_PLACE;
   }
 
-  const uint64_t* src = (const uint64_t*)(buffer);
   hm_u64map_database_t* db = (hm_u64map_database_t*)(db_place);
   *db_ptr = db;
-  db->factor1 = *src;
-  src++;
-  db->factor2 = *src;
-  src++;
-  uint64_t buckets = *src;
+  memcpy(&db->factor1, buffer + 0 * sizeof(uint64_t), sizeof(uint64_t));
+  memcpy(&db->factor2, buffer + 1 * sizeof(uint64_t), sizeof(uint64_t));
+  uint64_t buckets = 0;
+  memcpy(&buckets, buffer + 2 * sizeof(uint64_t), sizeof(uint64_t));
   db->mask_for_hash = buckets - 1 - 3;
 
   buffer += 4 * sizeof(uint64_t);
   db_place += sizeof(hm_u64map_database_t);
 
   db->hash_table = (key_value_t*)(db_place);
-
-  const key_value_t* hash_table0 = (const key_value_t*)(buffer);
-  for (int i = 0; i < buckets; i++) {
-    db->hash_table[i] = hash_table0[i];
-  }
+  memcpy(db->hash_table, buffer, sizeof(key_value_t) * buckets);
 
   debugf("factors: %" PRIu64 " %" PRIu64 "\n", db->factor1, db->factor2);
 

@@ -62,6 +62,28 @@ func TestCompileFail(t *testing.T) {
 	require.ErrorContains(t, err, "hm_sm_compile failed: 5")
 }
 
+func TestSerializeDeserializeWithMisalignedBuffer(t *testing.T) {
+	ips := []uint32{0x01000000, 0x01110000, 0x02000000}
+	cidrPrefixes := []uint8{8, 16, 8}
+	values := []uint64{10, 20, 30}
+	sm, err := Compile(ips, cidrPrefixes, values)
+	require.NoError(t, err)
+
+	serSize := smSerializedSizeForTest(sm)
+	require.Greater(t, serSize, 0)
+
+	raw := make([]byte, serSize+1)
+	misaligned := raw[1:]
+	hmErr := smSerializeIntoBufferForTest(sm, misaligned)
+	require.Equal(t, 0, hmErr)
+
+	sm2, err := FromSerialized(misaligned)
+	require.NoError(t, err)
+	for _, ip := range sampleIps(ips) {
+		require.Equal(t, sm.Find(ip), sm2.Find(ip))
+	}
+}
+
 func TestCompileRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
 	need := smDBPlaceSizeForTest(1)
 	require.Greater(t, need, 0)

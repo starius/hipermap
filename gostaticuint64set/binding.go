@@ -98,6 +98,19 @@ func u64DBPlaceSizeForTest(elements int) int {
 	return int(C.hm_u64_db_place_size(C.uint(elements)))
 }
 
+func u64SerializedSizeForTest(m *StaticUint64Set) int {
+	return int(C.hm_u64_serialized_size(m.db))
+}
+
+func u64SerializeIntoBufferForTest(m *StaticUint64Set, buffer []byte) int {
+	hmErr := C.hm_u64_serialize(
+		(*C.char)(unsafe.Pointer(&buffer[0])),
+		C.size_t(len(buffer)),
+		m.db,
+	)
+	return int(hmErr)
+}
+
 func u64CompileWithPlaceSizeForTest(dbPlace []byte, declaredSize int, keys []uint64) int {
 	var db *C.hm_u64_database_t
 	hmErr := C.hm_u64_compile(

@@ -73,6 +73,29 @@ func TestCompileFail(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSerializeDeserializeWithMisalignedBuffer(t *testing.T) {
+	db, err := Compile(map[uint64]uint64{
+		1: 10,
+		2: 20,
+		3: 30,
+	})
+	require.NoError(t, err)
+
+	serSize := u64mapSerializedSizeForTest(db)
+	require.Greater(t, serSize, 0)
+
+	raw := make([]byte, serSize+1)
+	misaligned := raw[1:]
+	hmErr := u64mapSerializeIntoBufferForTest(db, misaligned)
+	require.Equal(t, 0, hmErr)
+
+	db2, err := FromSerialized(misaligned)
+	require.NoError(t, err)
+	for _, key := range []uint64{0, 1, 2, 3, 4, 100} {
+		require.Equal(t, db.Find(key), db2.Find(key), key)
+	}
+}
+
 func TestCompileRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
 	need := u64mapDBPlaceSizeForTest(1)
 	require.Greater(t, need, 0)
