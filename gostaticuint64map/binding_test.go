@@ -248,3 +248,28 @@ func FuzzFind(f *testing.F) {
 		}
 	})
 }
+
+func TestDeserializeRejectsInvalidBucketCount(t *testing.T) {
+	// Serialized layout:
+	// uint64 factor1
+	// uint64 factor2
+	// uint64 buckets
+	// uint64 dummy
+	// []key_value_t hash_table
+	//
+	// buckets=1 underflows runtime mask computation and must be rejected.
+	serialized := make([]byte, 4*8+16)
+	binary.LittleEndian.PutUint64(serialized[0:8], 0xA6C3096657A14E89)
+	binary.LittleEndian.PutUint64(serialized[8:16], 0x24F963569D05D92E)
+	binary.LittleEndian.PutUint64(serialized[16:24], 1)
+	binary.LittleEndian.PutUint64(serialized[24:32], 0)
+	binary.LittleEndian.PutUint64(serialized[32:40], 1)
+	binary.LittleEndian.PutUint64(serialized[40:48], 1)
+
+	db, err := FromSerialized(serialized)
+	if err == nil {
+		_ = db.Find(1)
+		t.Fatalf("expected deserialization failure for invalid bucket count")
+	}
+	require.ErrorContains(t, err, "hm_u64map_db_place_size_from_serialized failed")
+}

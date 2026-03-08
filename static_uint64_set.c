@@ -286,6 +286,17 @@ hm_error_t HM_CDECL hm_u64_db_place_size_from_serialized(size_t* db_place_size,
     return HM_ERROR_NO_MASKS;
   }
 
+  // Enforce compile-time invariants required by runtime lookup:
+  // - number of buckets is a power of 2
+  // - minimum bucket count is 16
+  if (buckets < 16 || (buckets & (buckets - 1)) != 0) {
+    return HM_ERROR_BAD_VALUE;
+  }
+
+  if (buckets > (SIZE_MAX / sizeof(uint64_t)) - 3) {
+    return HM_ERROR_BAD_VALUE;
+  }
+
   size_t min_buffer_size = (3 + buckets) * sizeof(uint64_t);
   if (buffer_size < min_buffer_size) {
     return HM_ERROR_SMALL_PLACE;

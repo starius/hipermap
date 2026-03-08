@@ -330,7 +330,19 @@ hm_error_t HM_CDECL hm_u64map_db_place_size_from_serialized(
     return HM_ERROR_NO_MASKS;
   }
 
-  size_t min_buffer_size = 3 * sizeof(uint64_t) + buckets * sizeof(key_value_t);
+  // Enforce compile-time invariants required by runtime lookup:
+  // - number of buckets is a power of 2
+  // - minimum bucket count is 16
+  if (buckets < 16 || (buckets & (buckets - 1)) != 0) {
+    return HM_ERROR_BAD_VALUE;
+  }
+
+  if (buckets > (SIZE_MAX - 4 * sizeof(uint64_t)) / sizeof(key_value_t)) {
+    return HM_ERROR_BAD_VALUE;
+  }
+
+  // Serialized form includes 4 uint64_t header words before hash table.
+  size_t min_buffer_size = 4 * sizeof(uint64_t) + buckets * sizeof(key_value_t);
   if (buffer_size < min_buffer_size) {
     return HM_ERROR_SMALL_PLACE;
   }
