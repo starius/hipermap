@@ -45,6 +45,14 @@ func readLines(path string) ([]string, error) {
 	return out, nil
 }
 
+func readSerializedDB(path string) (*sds.StaticDomainSet, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return sds.FromSerialized(data)
+}
+
 func extractDomain(s string) (string, error) {
 	// Cut by comma: "<url>,<count>"
 	if i := strings.IndexByte(s, ','); i >= 0 {
@@ -81,30 +89,45 @@ func extractDomain(s string) (string, error) {
 
 func main() {
 	patternsPath := flag.String("patterns", "", "path to patterns file (one domain per line)")
+	patternsBinPath := flag.String("patterns-bin", "", "path to serialized patterns DB")
 	textPath := flag.String("text", "", "path to text file with 'url,count' lines")
 	flag.Parse()
 
-	if *patternsPath == "" || *textPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: verify -patterns=patterns.txt -text=text.csv")
+	if *textPath == "" || (*patternsPath == "" && *patternsBinPath == "") || (*patternsPath != "" && *patternsBinPath != "") {
+		fmt.Fprintln(os.Stderr, "usage: verify (-patterns=patterns.txt | -patterns-bin=patterns.bin) -text=text.csv")
 		os.Exit(2)
 	}
 
-	patterns, err := readLines(*patternsPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "read patterns:", err)
-		os.Exit(1)
-	}
-	if len(patterns) == 0 {
-		fmt.Fprintln(os.Stderr, "no patterns loaded")
-		os.Exit(1)
+	var patterns []string
+	var ds *sds.StaticDomainSet
+	var err error
+	fromSerializedDB := false
+	if *patternsBinPath != "" {
+		fromSerializedDB = true
+		ds, err = readSerializedDB(*patternsBinPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "deserialize patterns DB:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Loaded serialized patterns DB: %s\n", *patternsBinPath)
+	} else {
+		patterns, err = readLines(*patternsPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "read patterns:", err)
+			os.Exit(1)
+		}
+		if len(patterns) == 0 {
+			fmt.Fprintln(os.Stderr, "no patterns loaded")
+			os.Exit(1)
+		}
+		ds, err = sds.Compile(patterns)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "compile optimized DB:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Loaded patterns: %d\n", len(patterns))
 	}
 
-	// Build optimized DB
-	ds, err := sds.Compile(patterns)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "compile optimized DB:", err)
-		os.Exit(1)
-	}
 	// Print DB summary immediately after compile and its serialized size
 	fmt.Println(ds.String())
 	if ser, err := ds.Serialize(); err == nil {
@@ -125,8 +148,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build naive DB
-	naive := sds.NewNaiveDomainSet(patterns)
+	// Build naive DB when we have raw patterns.
+	var naive *sds.NaiveDomainSet
+	if !fromSerializedDB {
+		naive = sds.NewNaiveDomainSet(patterns)
+	}
 
 	// Validate all pattern domains against both implementations and
 	// also some derivatives: add subdomain, remove subdomain, add letter,
@@ -139,53 +165,55 @@ func main() {
 	patternTotals := map[string]int{"exact": 0, "add_subdomain": 0, "remove_subdomain": 0, "add_letter": 0, "remove_letter": 0, "trailing_dot": 0}
 	patternMism := map[string]int{"exact": 0, "add_subdomain": 0, "remove_subdomain": 0, "add_letter": 0, "remove_letter": 0, "trailing_dot": 0}
 	patternErrs := map[string]int{"exact": 0, "add_subdomain": 0, "remove_subdomain": 0, "add_letter": 0, "remove_letter": 0, "trailing_dot": 0}
-	for idx, p := range patterns {
-		// Helper to check a single domain
-		which := 0
-		check := func(label, dom string) {
-			patternTotals[label]++
-			// Alternate between original and deserialized DB for coverage
-			var gotFast bool
-			var errFast error
-			if which%2 == 0 {
-				gotFast, errFast = ds.Find(dom)
-			} else {
-				gotFast, errFast = ds2.Find(dom)
+	if naive != nil {
+		for idx, p := range patterns {
+			// Helper to check a single domain.
+			which := 0
+			check := func(label, dom string) {
+				patternTotals[label]++
+				// Alternate between original and deserialized DB for coverage.
+				var gotFast bool
+				var errFast error
+				if which%2 == 0 {
+					gotFast, errFast = ds.Find(dom)
+				} else {
+					gotFast, errFast = ds2.Find(dom)
+				}
+				which++
+				if errFast != nil {
+					fmt.Fprintf(os.Stderr, "error on pattern[%d] %s: domain=%q err=%v\n", idx, label, dom, errFast)
+					patternErrs[label]++
+					patternErrors++
+					return
+				}
+				gotNaive, _ := naive.Find(dom)
+				if gotFast != gotNaive {
+					fmt.Fprintf(os.Stderr, "mismatch on pattern[%d] %s: domain=%q fast=%v naive=%v\n", idx, label, dom, gotFast, gotNaive)
+					patternMismatches++
+					patternMism[label]++
+				}
 			}
-			which++
-			if errFast != nil {
-				fmt.Fprintf(os.Stderr, "error on pattern[%d] %s: domain=%q err=%v\n", idx, label, dom, errFast)
-				patternErrs[label]++
-				patternErrors++
-				return
+			// Exact
+			check("exact", p)
+			// Add subdomain; skip if resulting domain exceeds 253 bytes.
+			if d := "x." + p; len(d) <= 253 {
+				check("add_subdomain", d)
 			}
-			gotNaive, _ := naive.Find(dom)
-			if gotFast != gotNaive {
-				fmt.Fprintf(os.Stderr, "mismatch on pattern[%d] %s: domain=%q fast=%v naive=%v\n", idx, label, dom, gotFast, gotNaive)
-				patternMismatches++
-				patternMism[label]++
+			// Remove subdomain (drop leftmost label if present)
+			if i := strings.IndexByte(p, '.'); i >= 0 && i+1 < len(p) {
+				check("remove_subdomain", p[i+1:])
 			}
+			// Add letter at the beginning; skip if resulting domain exceeds 253 bytes.
+			if d := "a" + p; len(d) <= 253 {
+				check("add_letter", d)
+			}
+			// Remove letter at the beginning if non-empty
+			if len(p) > 0 {
+				check("remove_letter", p[1:])
+			}
+			// Trailing dot variant
+			check("trailing_dot", p+".")
 		}
-		// Exact
-		check("exact", p)
-		// Add subdomain; skip if resulting domain exceeds 253 bytes.
-		if d := "x." + p; len(d) <= 253 {
-			check("add_subdomain", d)
-		}
-		// Remove subdomain (drop leftmost label if present)
-		if i := strings.IndexByte(p, '.'); i >= 0 && i+1 < len(p) {
-			check("remove_subdomain", p[i+1:])
-		}
-		// Add letter at the beginning; skip if resulting domain exceeds 253 bytes.
-		if d := "a" + p; len(d) <= 253 {
-			check("add_letter", d)
-		}
-		// Remove letter at the beginning if non-empty
-		if len(p) > 0 {
-			check("remove_letter", p[1:])
-		}
-		// Trailing dot variant
-		check("trailing_dot", p+".")
 	}
 
 	f, err := os.Open(*textPath)
@@ -237,6 +265,12 @@ func main() {
 			fastFindErrors++
 			continue
 		}
+		if naive == nil {
+			if gotFast {
+				fastMatched++
+			}
+			continue
+		}
 		t1 := time.Now()
 		gotNaive, errNaive := naive.Find(dom)
 		naiveTotal += time.Since(t1)
@@ -276,22 +310,30 @@ func main() {
 	var fastPct, naivePct, discPct float64
 	if valid > 0 {
 		fastPct = float64(fastMatched) * 100.0 / float64(valid)
-		naivePct = float64(naiveMatched) * 100.0 / float64(valid)
-		discPct = float64(discrepancies) * 100.0 / float64(valid)
+		if naive != nil {
+			naivePct = float64(naiveMatched) * 100.0 / float64(valid)
+			discPct = float64(discrepancies) * 100.0 / float64(valid)
+		}
 	}
 	fmt.Printf("Inputs: total=%d, valid=%d, parse_errors=%d\n", total, valid, parseErrors)
 	fmt.Printf("Fast matches:  %d of %d (%.3f%%)\n", fastMatched, valid, fastPct)
-	fmt.Printf("Naive matches: %d of %d (%.3f%%)\n", naiveMatched, valid, naivePct)
-	// Per-label pattern validation totals
-	fmt.Printf("Pattern checks by label:\n")
-	for _, lbl := range labels {
-		fmt.Printf("  %-16s tests=%d mismatches=%d errors=%d\n", lbl+":", patternTotals[lbl], patternMism[lbl], patternErrs[lbl])
-	}
-	fmt.Printf("Pattern check mismatches: %d errors: %d\n", patternMismatches, patternErrors)
-	if valid > 0 {
-		fmt.Printf("Discrepancies: %d of %d (%.3f%%)\n", discrepancies, valid, discPct)
+	if naive != nil {
+		fmt.Printf("Naive matches: %d of %d (%.3f%%)\n", naiveMatched, valid, naivePct)
+		// Per-label pattern validation totals
+		fmt.Printf("Pattern checks by label:\n")
+		for _, lbl := range labels {
+			fmt.Printf("  %-16s tests=%d mismatches=%d errors=%d\n", lbl+":", patternTotals[lbl], patternMism[lbl], patternErrs[lbl])
+		}
+		fmt.Printf("Pattern check mismatches: %d errors: %d\n", patternMismatches, patternErrors)
+		if valid > 0 {
+			fmt.Printf("Discrepancies: %d of %d (%.3f%%)\n", discrepancies, valid, discPct)
+		} else {
+			fmt.Printf("Discrepancies: %d of %d (%.3f%%)\n", discrepancies, valid, 0.0)
+		}
 	} else {
-		fmt.Printf("Discrepancies: %d of %d (%.3f%%)\n", discrepancies, valid, 0.0)
+		fmt.Printf("Naive checks: skipped (patterns input is a serialized DB)\n")
+		fmt.Printf("Pattern checks by label: skipped (patterns input is a serialized DB)\n")
+		fmt.Printf("Discrepancies: skipped (requires raw patterns for naive matcher)\n")
 	}
 	if total > 0 {
 		errTotal := parseErrors + fastFindErrors + naiveFindErrors
@@ -305,7 +347,7 @@ func main() {
 	if fastN > 0 {
 		fmt.Printf("Avg find latency (fast):  %.0f ns\n", float64(fastTotal.Nanoseconds())/float64(fastN))
 	}
-	if naiveN > 0 {
+	if naive != nil && naiveN > 0 {
 		fmt.Printf("Avg find latency (naive): %.0f ns\n", float64(naiveTotal.Nanoseconds())/float64(naiveN))
 	}
 }

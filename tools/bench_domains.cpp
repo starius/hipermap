@@ -1,7 +1,9 @@
 // Benchmark tool for StaticDomainSet vs naive matcher.
 // Usage:
-//   bench_domains -patterns=patterns.txt -text=text.csv [-n=10] [-naive_n=2]
-// Reads patterns (one domain per line; keeps up to first whitespace),
+//   bench_domains (-patterns=patterns.txt | -patterns-bin=patterns.bin)
+//                 -text=text.csv [-n=10] [-naive_n=2]
+// Reads patterns (one domain per line; keeps up to first whitespace) or a
+// serialized domain DB,
 // and a text file with lines like "<url>,<count>"; extracts hostnames.
 // Builds the optimized C++ static domain set and a naive C++ matcher.
 // Runs N passes over all text domains calling find and times total duration.
@@ -16,6 +18,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -57,6 +60,17 @@ static const char* hm_err_to_str(hm_error_t e) {
     default:
       return "unknown error";
   }
+}
+
+static inline bool read_file_bytes(const std::string& path,
+                                   std::vector<char>& out) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return false;
+  }
+  out.assign(std::istreambuf_iterator<char>(in),
+             std::istreambuf_iterator<char>());
+  return in.good() || in.eof();
 }
 
 static inline std::string ascii_lower(std::string s) {
@@ -327,6 +341,7 @@ struct FastDB {
 
 int main(int argc, char** argv) {
   std::string patterns_path;
+  std::string patterns_bin_path;
   std::string text_path;
   int N = 10;
   int N_naive = 2;
@@ -338,6 +353,8 @@ int main(int argc, char** argv) {
     const char* a = argv[i];
     if (strncmp(a, "-patterns=", 10) == 0) {
       patterns_path.assign(a + 10);
+    } else if (strncmp(a, "-patterns-bin=", 14) == 0) {
+      patterns_bin_path.assign(a + 14);
     } else if (strncmp(a, "-text=", 6) == 0) {
       text_path.assign(a + 6);
     } else if (strncmp(a, "-n=", 3) == 0) {
@@ -361,7 +378,9 @@ int main(int argc, char** argv) {
       add_pathological = std::atoi(a + 14) != 0;
     } else if ((strcmp(a, "-h") == 0) || (strcmp(a, "--help") == 0)) {
       std::fprintf(stderr,
-                   "usage: bench_domains -patterns=patterns.txt -text=text.csv "
+                   "usage: bench_domains "
+                   "(-patterns=patterns.txt | -patterns-bin=patterns.bin) "
+                   "-text=text.csv "
                    "[-n=10] [-naive_n=2] [-hs_n=4] [-pathological]\n");
       return 2;
     } else {
@@ -369,20 +388,37 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (patterns_path.empty() || text_path.empty()) {
+  if (text_path.empty() ||
+      (patterns_path.empty() == patterns_bin_path.empty())) {
     std::fprintf(stderr,
-                 "usage: bench_domains -patterns=patterns.txt -text=text.csv "
+                 "usage: bench_domains "
+                 "(-patterns=patterns.txt | -patterns-bin=patterns.bin) "
+                 "-text=text.csv "
                  "[-n=10] [-naive_n=2] [-hs_n=4] [-pathological]\n");
     return 2;
   }
 
-  std::cout << "Loading patterns: " << patterns_path << "..." << std::endl;
+  const bool has_raw_patterns = !patterns_path.empty();
   std::vector<std::string> patterns;
-  if (!read_patterns(patterns_path, patterns) || patterns.empty()) {
-    std::fprintf(stderr, "failed to read patterns or none loaded\n");
-    return 1;
+  std::vector<char> patterns_ser;
+  if (has_raw_patterns) {
+    std::cout << "Loading patterns: " << patterns_path << "..." << std::endl;
+    if (!read_patterns(patterns_path, patterns) || patterns.empty()) {
+      std::fprintf(stderr, "failed to read patterns or none loaded\n");
+      return 1;
+    }
+    std::cout << "Loaded patterns: " << patterns.size() << std::endl;
+  } else {
+    std::cout << "Loading serialized patterns DB: " << patterns_bin_path
+              << "..." << std::endl;
+    if (!read_file_bytes(patterns_bin_path, patterns_ser) ||
+        patterns_ser.empty()) {
+      std::fprintf(stderr, "failed to read serialized patterns DB\n");
+      return 1;
+    }
+    std::cout << "Loaded serialized patterns DB bytes: " << patterns_ser.size()
+              << std::endl;
   }
-  std::cout << "Loaded patterns: " << patterns.size() << std::endl;
 
   std::cout << "Loading text: " << text_path << "..." << std::endl;
   auto t_load0 = std::chrono::steady_clock::now();
@@ -396,18 +432,28 @@ int main(int argc, char** argv) {
             << (add_pathological ? " (with pathological prefixes)" : "")
             << std::endl;
 
-  // Build fast DB
-  std::cout << "Compiling fast DB..." << std::endl;
+  // Build/deserialize fast DB.
+  std::cout << "Preparing fast DB..." << std::endl;
   auto t_compile0 = std::chrono::steady_clock::now();
   FastDB fast;
-  hm_error_t build_err = fast.build(patterns);
-  if (build_err != HM_SUCCESS) {
-    std::fprintf(stderr, "failed to build fast DB: %s (%d)\n",
-                 hm_err_to_str(build_err), (int)build_err);
-    return 1;
+  if (has_raw_patterns) {
+    hm_error_t build_err = fast.build(patterns);
+    if (build_err != HM_SUCCESS) {
+      std::fprintf(stderr, "failed to build fast DB: %s (%d)\n",
+                   hm_err_to_str(build_err), (int)build_err);
+      return 1;
+    }
+  } else {
+    if (!fast.deserialize_db(patterns_ser)) {
+      std::fprintf(stderr,
+                   "failed to deserialize fast DB from -patterns-bin\n");
+      return 1;
+    }
   }
   auto t_compile1 = std::chrono::steady_clock::now();
-  std::cout << "Compiled fast DB. buckets=" << hm_domain_buckets(fast.db)
+  std::cout << (has_raw_patterns ? "Compiled fast DB. "
+                                 : "Deserialized fast DB. ")
+            << "buckets=" << hm_domain_buckets(fast.db)
             << " popular=" << hm_domain_popular_count(fast.db)
             << " used_total=" << hm_domain_used_total(fast.db) << " seed=0x"
             << std::hex << hm_domain_hash_seed(fast.db) << std::dec
@@ -447,12 +493,15 @@ int main(int argc, char** argv) {
             << ", deserialize=" << (d_deser.count() * 1e3) << " ms"
             << ", load_text=" << (d_load.count() * 1e3) << " ms" << std::endl;
 
-  // Build naive DB
-  std::cout << "Building naive matcher..." << std::endl;
-  auto t_naive0 = std::chrono::steady_clock::now();
+  const bool naive_enabled = has_raw_patterns;
   NaiveMatcher naive(patterns);
-  auto t_naive1 = std::chrono::steady_clock::now();
-  std::cout << "Built naive matcher." << std::endl;
+  if (naive_enabled) {
+    std::cout << "Built naive matcher." << std::endl;
+  } else {
+    std::cout << "Skipping naive matcher: -patterns-bin does not include raw "
+                 "patterns."
+              << std::endl;
+  }
 
 #ifdef BENCH_ENABLE_HYPERSCAN
   // Pre-build Hyperscan DB and scratch before timing loops
@@ -460,7 +509,7 @@ int main(int argc, char** argv) {
   DomainMapDB hsdb2 = nullptr;
   DomainMapDBScratch hs_scratch = nullptr;
   DomainMapDBScratch hs_scratch2 = nullptr;
-  if (N_hs > 0) {
+  if (N_hs > 0 && has_raw_patterns) {
     std::cout << "Building Hyperscan DB..." << std::endl;
     std::vector<const char*> hspats;
     hspats.reserve(patterns.size());
@@ -482,6 +531,10 @@ int main(int argc, char** argv) {
         (void)domain_map_db_scratch_adjust_to_db(hs_scratch2, hsdb2);
       }
     }
+  } else if (N_hs > 0) {
+    std::cout
+        << "Skipping Hyperscan: -patterns-bin does not include raw patterns."
+        << std::endl;
   }
 #endif
 
@@ -546,7 +599,6 @@ int main(int argc, char** argv) {
   }
   auto t1 = std::chrono::steady_clock::now();
   std::chrono::duration<double> fast_sec = t1 - t0;
-  double fast_ns_per_call = (fast_sec.count() * 1e9) / (double)total_calls;
   double fast_pct_total = (double)fast_hits * 100.0 / (double)total_calls;
   std::cout << "Finished fast in " << fast_sec.count()
             << " s, total_calls=" << total_calls << ", hits=" << fast_hits
@@ -554,54 +606,54 @@ int main(int argc, char** argv) {
             << "%)"
             << ", errors=" << fast_errs << std::defaultfloat << std::endl;
 
-  // Timed loops: naive
-  const size_t naive_total_calls = (size_t)N_naive * hosts.size();
-  std::cout << "Running naive: N=" << N_naive << ", inputs=" << hosts.size()
-            << std::endl;
-  auto n0 = std::chrono::steady_clock::now();
+  // Timed loops: naive (raw patterns only)
+  size_t naive_total_calls = 0;
   uint64_t naive_hits = 0;
   uint64_t naive_errs = 0;
   std::vector<double> naive_attempt_ns_per_call;
-  naive_attempt_ns_per_call.reserve(N_naive);
-  for (int iter = 0; iter < N_naive; ++iter) {
-    auto a0 = std::chrono::steady_clock::now();
-    std::cout << "  Naive attempt " << (iter + 1) << " of " << N_naive
+  double naive_pct_total = 0.0;
+  if (naive_enabled) {
+    naive_total_calls = (size_t)N_naive * hosts.size();
+    std::cout << "Running naive: N=" << N_naive << ", inputs=" << hosts.size()
               << std::endl;
-    for (const auto& h : hosts) {
-      int rc = naive.find_rc(h);
-      if (rc < 0) {
-        naive_errs++;
-      } else if (rc == 1) {
-        naive_hits++;
+    auto n0 = std::chrono::steady_clock::now();
+    naive_attempt_ns_per_call.reserve(N_naive);
+    for (int iter = 0; iter < N_naive; ++iter) {
+      auto a0 = std::chrono::steady_clock::now();
+      std::cout << "  Naive attempt " << (iter + 1) << " of " << N_naive
+                << std::endl;
+      for (const auto& h : hosts) {
+        int rc = naive.find_rc(h);
+        if (rc < 0) {
+          naive_errs++;
+        } else if (rc == 1) {
+          naive_hits++;
+        }
       }
+      auto a1 = std::chrono::steady_clock::now();
+      std::chrono::duration<double> at = a1 - a0;
+      double ns_per_call = (at.count() * 1e9) / (double)hosts.size();
+      double adj = ns_per_call - baseline_ns;
+      naive_attempt_ns_per_call.push_back(adj < 0 ? 0.0 : adj);
     }
-    auto a1 = std::chrono::steady_clock::now();
-    std::chrono::duration<double> at = a1 - a0;
-    double ns_per_call = (at.count() * 1e9) / (double)hosts.size();
-    double adj = ns_per_call - baseline_ns;
-    naive_attempt_ns_per_call.push_back(adj < 0 ? 0.0 : adj);
+    auto n1 = std::chrono::steady_clock::now();
+    std::chrono::duration<double> naive_sec = n1 - n0;
+    naive_pct_total = (double)naive_hits * 100.0 / (double)naive_total_calls;
+    std::cout << "Finished naive in " << naive_sec.count()
+              << " s, total_calls=" << naive_total_calls
+              << ", hits=" << naive_hits << " (" << std::fixed
+              << std::setprecision(3) << naive_pct_total << "%)"
+              << ", errors=" << naive_errs << std::defaultfloat << std::endl;
   }
-  auto n1 = std::chrono::steady_clock::now();
-  std::chrono::duration<double> naive_sec = n1 - n0;
-  double naive_ns_per_call =
-      (naive_sec.count() * 1e9) / (double)naive_total_calls;
-  double naive_pct_total =
-      (double)naive_hits * 100.0 / (double)naive_total_calls;
-  std::cout << "Finished naive in " << naive_sec.count()
-            << " s, total_calls=" << naive_total_calls
-            << ", hits=" << naive_hits << " (" << std::fixed
-            << std::setprecision(3) << naive_pct_total << "%)"
-            << ", errors=" << naive_errs << std::defaultfloat << std::endl;
 
   // Hyperscan reporting moved after compute_stats is defined (below)
 
   // Output
   uint64_t fast_matches_per_pass = (uint64_t)(fast_hits / (uint64_t)N);
-  uint64_t naive_matches_per_pass = (uint64_t)(naive_hits / (uint64_t)N_naive);
+  uint64_t naive_matches_per_pass = 0;
   double fast_pct_per_pass =
       (double)fast_matches_per_pass * 100.0 / (double)hosts.size();
-  double naive_pct_per_pass =
-      (double)naive_matches_per_pass * 100.0 / (double)hosts.size();
+  double naive_pct_per_pass = 0.0;
   auto compute_stats = [](const std::vector<double>& v, double& avg, double& mn,
                           double& med, double& mx) {
     if (v.empty()) {
@@ -638,25 +690,32 @@ int main(int argc, char** argv) {
       (unsigned long long)fast_matches_per_pass, fast_pct_per_pass,
       (unsigned long long)fast_hits, fast_pct_total,
       (unsigned long long)fast_errs);
-  double navg, nminv, nmed, nmaxv;
-  compute_stats(naive_attempt_ns_per_call, navg, nminv, nmed, nmaxv);
-  std::printf(
-      "Naive: per-call latency (ns): avg=%.3f min=%.3f median=%.3f max=%.3f "
-      "(N=%d, inputs=%zu)\n",
-      navg, nminv, nmed, nmaxv, N_naive, hosts.size());
-  std::printf(
-      "       matches (per pass) = %llu (%.3f%%), total=%llu (%.3f%%), "
-      "errors=%llu\n",
-      (unsigned long long)naive_matches_per_pass, naive_pct_per_pass,
-      (unsigned long long)naive_hits, naive_pct_total,
-      (unsigned long long)naive_errs);
+  if (naive_enabled) {
+    naive_matches_per_pass = (uint64_t)(naive_hits / (uint64_t)N_naive);
+    naive_pct_per_pass =
+        (double)naive_matches_per_pass * 100.0 / (double)hosts.size();
+    double navg, nminv, nmed, nmaxv;
+    compute_stats(naive_attempt_ns_per_call, navg, nminv, nmed, nmaxv);
+    std::printf(
+        "Naive: per-call latency (ns): avg=%.3f min=%.3f median=%.3f max=%.3f "
+        "(N=%d, inputs=%zu)\n",
+        navg, nminv, nmed, nmaxv, N_naive, hosts.size());
+    std::printf(
+        "       matches (per pass) = %llu (%.3f%%), total=%llu (%.3f%%), "
+        "errors=%llu\n",
+        (unsigned long long)naive_matches_per_pass, naive_pct_per_pass,
+        (unsigned long long)naive_hits, naive_pct_total,
+        (unsigned long long)naive_errs);
+  } else {
+    std::printf("Naive: skipped (requires -patterns with raw domain list)\n");
+  }
   // Divergence expected due to current popular collision bug.
 
   (void)fast_hits;  // avoid unused warnings if compiled with -Wall
   (void)naive_hits;
 
 #ifdef BENCH_ENABLE_HYPERSCAN
-  if (N_hs > 0) {
+  if (N_hs > 0 && has_raw_patterns) {
     // Use pre-built Hyperscan DB and scratch from above
     if (!hsdb || !hsdb2 || !hs_scratch || !hs_scratch2) {
       std::fprintf(stderr, "Hyperscan: not initialized; skipping runs\n");
