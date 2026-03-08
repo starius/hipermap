@@ -438,6 +438,18 @@ extern "C" HM_PUBLIC_API hm_error_t HM_CDECL hm_sm_deserialize(
   memcpy(db->max_ips, max_ips_buf, sizeof(uint32_t) * list_size_val);
   memcpy(db->values, values_buf, sizeof(uint64_t) * list_size_val);
 
+  // Validate invariants expected by hm_sm_find/fill_hashtable:
+  // - max_ips must be monotonically non-decreasing.
+  // - The last element must be INT32_MAX sentinel to guarantee lookup stop.
+  for (size_t i = 1; i < db->list_size; i++) {
+    if (db->max_ips[i - 1] > db->max_ips[i]) {
+      return HM_ERROR_BAD_VALUE;
+    }
+  }
+  if (db->max_ips[db->list_size - 1] != INT32_MAX) {
+    return HM_ERROR_BAD_VALUE;
+  }
+
   fill_hashtable(db);
 
   return HM_SUCCESS;

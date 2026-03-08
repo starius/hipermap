@@ -1,6 +1,7 @@
 package gosm
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"testing"
@@ -295,4 +296,24 @@ func FuzzDeserialize(f *testing.F) {
 		t.Log(hex.EncodeToString(ser))
 		_, _ = FromSerialized(ser)
 	})
+}
+
+func TestDeserializeRejectsInvalidMaxIpsLayout(t *testing.T) {
+	// Serialized format:
+	// uint64 list_size
+	// list_size * uint32 max_ips
+	// list_size * uint64 values
+	//
+	// list_size=1 with max_ips[0]=0 violates required lookup invariants.
+	serialized := make([]byte, 8+4+8)
+	binary.LittleEndian.PutUint64(serialized[0:8], 1)
+	binary.LittleEndian.PutUint32(serialized[8:12], 0)
+	binary.LittleEndian.PutUint64(serialized[12:20], 0)
+
+	sm, err := FromSerialized(serialized)
+	if err == nil {
+		_ = sm.Find(0xFFFFFFFF)
+		t.Fatalf("expected deserialization failure for malformed max_ips")
+	}
+	require.ErrorContains(t, err, "hm_sm_deserialize failed")
 }
