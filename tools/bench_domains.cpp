@@ -20,6 +20,8 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -427,9 +429,14 @@ int main(int argc, char** argv) {
         N = 10;
       }
     } else if (strncmp(a, "-naive_n=", 9) == 0) {
-      N_naive = std::atoi(a + 9);
-      if (N_naive <= 0) {
+      const char* v = a + 9;
+      char* end = nullptr;
+      long parsed = std::strtol(v, &end, 10);
+      if (end == v || *end != '\0' || parsed < 0 ||
+          parsed > std::numeric_limits<int>::max()) {
         N_naive = 2;
+      } else {
+        N_naive = static_cast<int>(parsed);
       }
     } else if (strncmp(a, "-hs_n=", 6) == 0) {
       N_hs = std::atoi(a + 6);
@@ -569,10 +576,14 @@ int main(int argc, char** argv) {
             << ", deserialize=" << (d_deser.count() * 1e3) << " ms"
             << ", load_text=" << (d_load.count() * 1e3) << " ms" << std::endl;
 
-  const bool naive_enabled = has_raw_patterns;
-  NaiveMatcher naive(patterns);
+  const bool naive_supported = has_raw_patterns;
+  const bool naive_enabled = naive_supported && N_naive > 0;
+  std::unique_ptr<NaiveMatcher> naive;
   if (naive_enabled) {
+    naive = std::make_unique<NaiveMatcher>(patterns);
     std::cout << "Built naive matcher." << std::endl;
+  } else if (naive_supported) {
+    std::cout << "Skipping naive matcher: disabled by -naive_n=0." << std::endl;
   } else {
     std::cout << "Skipping naive matcher: -patterns-bin does not include raw "
                  "patterns."
@@ -699,7 +710,7 @@ int main(int argc, char** argv) {
       std::cout << "  Naive attempt " << (iter + 1) << " of " << N_naive
                 << std::endl;
       for (const auto& h : hosts) {
-        int rc = naive.find_rc(h);
+        int rc = naive->find_rc(h);
         if (rc < 0) {
           naive_errs++;
         } else if (rc == 1) {
@@ -782,8 +793,10 @@ int main(int argc, char** argv) {
         (unsigned long long)naive_matches_per_pass, naive_pct_per_pass,
         (unsigned long long)naive_hits, naive_pct_total,
         (unsigned long long)naive_errs);
-  } else {
+  } else if (!naive_supported) {
     std::printf("Naive: skipped (requires -patterns with raw domain list)\n");
+  } else {
+    std::printf("Naive: skipped (-naive_n=0)\n");
   }
   // Divergence expected due to current popular collision bug.
 
