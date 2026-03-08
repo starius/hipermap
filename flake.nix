@@ -1,5 +1,5 @@
 {
-  description = "Hipermap: C/C++ lib + bench tool, Go verify tool";
+  description = "Hipermap: C/C++ lib + tools";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   inputs.flake-utils.url = "github:numtide/flake-utils";
@@ -164,7 +164,7 @@
             );
           };
 
-        # Common Go module builder (verify or tests) with cgo and external linker
+        # Common Go module builder (tools or tests) with cgo and external linker
         mkGoModuleCommon =
           {
             pkgsX,
@@ -211,14 +211,17 @@
             ];
           };
 
-        # Go verify binary
+        # Go command-line tools
         mkGoVerify =
           args:
           mkGoModuleCommon (
             args
             // {
-              pname = "verify";
-              subPackages = [ "gostaticdomainset/cmd/verify" ];
+              pname = "gostaticdomainset-tools";
+              subPackages = [
+                "gostaticdomainset/cmd/verify"
+                "gostaticdomainset/cmd/sds-compile"
+              ];
               buildTestBinaries = false;
             }
           );
