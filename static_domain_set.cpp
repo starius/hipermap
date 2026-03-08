@@ -1220,6 +1220,7 @@ extern "C" hm_error_t HM_CDECL hm_domain_deserialize(
 
   auto rebuild_table = [&](domains_table_record_t* recs,
                            uint32_t rec_count) -> bool {
+    const size_t compare_read_max = round_up16(MAX_DOMAIN_LEN + 1);
     if (!recs || rec_count == 0) {
       return true;
     }
@@ -1232,11 +1233,19 @@ extern "C" hm_error_t HM_CDECL hm_domain_deserialize(
       if (base_off > db->domains_blob_size) {
         return false;
       }
+      if ((base_off % D) != 0) {
+        return false;
+      }
       rec->domains_blob = db->domains_blob + base_off;
       for (uint32_t i = 0; i < rec->used_slots; i++) {
         size_t off_units = (size_t)rec->domains_offsets[i];
         size_t pos = base_off + off_units * D;
-        if (pos + MAX_DOMAIN_LEN >= db->domains_blob_size) {
+        if (pos > db->domains_blob_size) {
+          return false;
+        }
+        // scan_tags compare path may read up to round_up16(MAX_DOMAIN_LEN+1)
+        // bytes due final SIMD chunk load.
+        if (db->domains_blob_size - pos < compare_read_max) {
           return false;
         }
       }

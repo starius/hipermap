@@ -1118,3 +1118,56 @@ func TestTopLevelDomains_MultiRecord(t *testing.T) {
 		})
 	}
 }
+
+func mutateRecordBlobOffsets(buf []byte) bool {
+	if len(buf) < 4+64 {
+		return false
+	}
+	if binary.LittleEndian.Uint32(buf[:4]) != 0x32444d48 {
+		return false
+	}
+
+	hdr := buf[4 : 4+64]
+	buckets := binary.LittleEndian.Uint32(hdr[8:12])
+	popularRecords := binary.LittleEndian.Uint32(hdr[16:20])
+	tldRecords := binary.LittleEndian.Uint32(hdr[24:28])
+
+	totalRecords := int(tldRecords + popularRecords + buckets)
+	recBase := 4 + 64
+	mutated := false
+	for i := 0; i < totalRecords; i++ {
+		recOff := recBase + i*64
+		if recOff+64 > len(buf) {
+			return false
+		}
+		used := binary.LittleEndian.Uint16(buf[recOff+56 : recOff+58])
+		if used == 0 {
+			continue
+		}
+		// Corrupt domains_blob_offset alignment for used records.
+		binary.LittleEndian.PutUint32(buf[recOff+60:recOff+64], 1)
+		mutated = true
+	}
+	return mutated
+}
+
+func TestDeserializeRejectsInvalidRecordBlobOffsets(t *testing.T) {
+	ds, err := Compile([]string{
+		"example.com",
+		"api.example.com",
+	})
+	require.NoError(t, err)
+
+	ser, err := ds.Serialize()
+	require.NoError(t, err)
+
+	bad := append([]byte(nil), ser...)
+	require.True(t, mutateRecordBlobOffsets(bad))
+
+	ds2, err := FromSerialized(bad)
+	if err == nil {
+		_, _ = ds2.Find("example.com")
+		t.Fatalf("expected deserialization to fail for invalid record offsets")
+	}
+	require.ErrorContains(t, err, "hm_domain_deserialize failed")
+}
