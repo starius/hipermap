@@ -20,6 +20,12 @@ struct hm_domain_database;
 // hm_domain_database_t is in-memory database type for static set of domains.
 typedef struct hm_domain_database hm_domain_database_t;
 
+// Pointer contract:
+// - Unless explicitly documented otherwise, all pointer arguments must be
+//   valid non-NULL pointers.
+// - Input pointers must reference readable memory for the full declared length.
+// - Output pointers must reference writable memory of sufficient size.
+
 // hm_domain_db_place_size returns an upper-bound db_place size for the given
 // input domains. The size intentionally over-allocates to accommodate seed and
 // bucket calibration and alignment/tail safety. To minimize memory, users are
@@ -43,6 +49,11 @@ hm_error_t HM_CDECL hm_domain_compile(char* db_place, size_t db_place_size,
                                       unsigned int elements);
 
 // hm_domain_find returns if the given domains key is present in the database.
+// Contract:
+// - db must be a valid non-NULL pointer returned by hm_domain_compile or
+//   hm_domain_deserialize.
+// - domain must be a valid non-NULL pointer to at least domain_len readable
+//   bytes.
 // Results: 0 - not found, 1 - found, (-1) - invalid input.
 int HM_CDECL hm_domain_find(const hm_domain_database_t* db, const char* domain,
                             size_t domain_len);

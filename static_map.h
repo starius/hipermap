@@ -18,6 +18,12 @@ struct hm_sm_database;
 // hm_sm_database_t is in-memory database type.
 typedef struct hm_sm_database hm_sm_database_t;
 
+// Pointer contract:
+// - Unless explicitly documented otherwise, all pointer arguments must be
+//   valid non-NULL pointers.
+// - Input pointers must reference readable memory for the full declared length.
+// - Output pointers must reference writable memory of sufficient size.
+
 // hm_sm_db_place_size returns db_place size.
 size_t HM_CDECL hm_sm_db_place_size(unsigned int elements);
 
@@ -34,6 +40,9 @@ hm_error_t HM_CDECL hm_sm_compile(char* db_place, size_t db_place_size,
                                   unsigned int elements);
 
 // hm_sm_find returns the value corresponding to the given IP in the database.
+// Contract:
+// - db must be a valid non-NULL pointer returned by hm_sm_compile or
+//   hm_sm_deserialize.
 uint64_t HM_CDECL hm_sm_find(const hm_sm_database_t* db, const uint32_t ip);
 
 // hm_sm_serialized_size returns how many bytes are needed to serialize db.
