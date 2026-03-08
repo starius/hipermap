@@ -112,7 +112,11 @@ hm_error_t HM_CDECL hm_u64_compile(char* db_place, size_t db_place_size,
   // Align db_place forward, if needed.
   {
     char* db_place2 = align32(db_place);
-    db_place_size -= (db_place2 - db_place);
+    size_t delta = (size_t)((uintptr_t)db_place2 - (uintptr_t)db_place);
+    if (delta > db_place_size) {
+      return HM_ERROR_SMALL_PLACE;
+    }
+    db_place_size -= delta;
     db_place = db_place2;
   }
 
@@ -321,7 +325,11 @@ hm_error_t HM_CDECL hm_u64_deserialize(char* db_place, size_t db_place_size,
   // Align db_place forward, if needed.
   {
     char* db_place2 = align32(db_place);
-    db_place_size -= (db_place2 - db_place);
+    size_t delta = (size_t)((uintptr_t)db_place2 - (uintptr_t)db_place);
+    if (delta > db_place_size) {
+      return HM_ERROR_SMALL_PLACE;
+    }
+    db_place_size -= delta;
     db_place = db_place2;
   }
 

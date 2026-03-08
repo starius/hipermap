@@ -94,3 +94,47 @@ func FromSerialized(buffer []byte) (*StaticMap, error) {
 		db:      db,
 	}, nil
 }
+
+func smDBPlaceSizeForTest(elements int) int {
+	return int(C.hm_sm_db_place_size(C.uint(elements)))
+}
+
+func smCompileWithPlaceSizeForTest(dbPlace []byte, declaredSize int, ips []uint32, cidrPrefixes []uint8, values []uint64) int {
+	var db *C.hm_sm_database_t
+	hmErr := C.hm_sm_compile(
+		(*C.char)(unsafe.Pointer(&dbPlace[0])),
+		C.size_t(declaredSize),
+		&db,
+		(*C.uint32_t)(unsafe.Pointer(&ips[0])),
+		(*C.uint8_t)(unsafe.Pointer(&cidrPrefixes[0])),
+		(*C.uint64_t)(unsafe.Pointer(&values[0])),
+		C.uint(len(ips)),
+	)
+	return int(hmErr)
+}
+
+func smDBPlaceSizeFromSerializedForTest(buffer []byte) (int, int) {
+	var dbPlaceSize C.size_t
+	hmErr := C.hm_sm_db_place_size_from_serialized(
+		&dbPlaceSize,
+		(*C.char)(unsafe.Pointer(&buffer[0])),
+		C.size_t(len(buffer)),
+	)
+	return int(dbPlaceSize), int(hmErr)
+}
+
+func smDeserializeWithPlaceSizeForTest(dbPlace []byte, declaredSize int, buffer []byte) int {
+	var db *C.hm_sm_database_t
+	hmErr := C.hm_sm_deserialize(
+		(*C.char)(unsafe.Pointer(&dbPlace[0])),
+		C.size_t(declaredSize),
+		&db,
+		(*C.char)(unsafe.Pointer(&buffer[0])),
+		C.size_t(len(buffer)),
+	)
+	return int(hmErr)
+}
+
+func hmErrorSmallPlaceForTest() int {
+	return int(C.HM_ERROR_SMALL_PLACE)
+}

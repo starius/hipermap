@@ -62,6 +62,40 @@ func TestCompileFail(t *testing.T) {
 	require.ErrorContains(t, err, "hm_sm_compile failed: 5")
 }
 
+func TestCompileRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
+	need := smDBPlaceSizeForTest(1)
+	require.Greater(t, need, 0)
+
+	backing := make([]byte, need+64)
+	hmErr := smCompileWithPlaceSizeForTest(
+		backing[1:],
+		1,
+		[]uint32{0x01000000},
+		[]uint8{8},
+		[]uint64{1},
+	)
+	require.Equal(t, hmErrorSmallPlaceForTest(), hmErr)
+}
+
+func TestDeserializeRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
+	sm, err := Compile(
+		[]uint32{0x01000000},
+		[]uint8{8},
+		[]uint64{1},
+	)
+	require.NoError(t, err)
+	ser, err := sm.Serialize()
+	require.NoError(t, err)
+
+	need, hmErr := smDBPlaceSizeFromSerializedForTest(ser)
+	require.Equal(t, 0, hmErr)
+	require.Greater(t, need, 0)
+
+	backing := make([]byte, need+64)
+	hmErr = smDeserializeWithPlaceSizeForTest(backing[1:], 1, ser)
+	require.Equal(t, hmErrorSmallPlaceForTest(), hmErr)
+}
+
 func TestFind(t *testing.T) {
 	testCases := [][]uint64{
 		{

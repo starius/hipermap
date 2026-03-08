@@ -52,6 +52,30 @@ func TestCompileFail(t *testing.T) {
 	require.ErrorContains(t, err, "hm_u64_compile failed: 4")
 }
 
+func TestCompileRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
+	need := u64DBPlaceSizeForTest(1)
+	require.Greater(t, need, 0)
+
+	backing := make([]byte, need+64)
+	hmErr := u64CompileWithPlaceSizeForTest(backing[1:], 1, []uint64{1})
+	require.Equal(t, hmErrorSmallPlaceForTest(), hmErr)
+}
+
+func TestDeserializeRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
+	db, err := Compile([]uint64{1, 2, 3})
+	require.NoError(t, err)
+	ser, err := db.Serialize()
+	require.NoError(t, err)
+
+	need, hmErr := u64DBPlaceSizeFromSerializedForTest(ser)
+	require.Equal(t, 0, hmErr)
+	require.Greater(t, need, 0)
+
+	backing := make([]byte, need+64)
+	hmErr = u64DeserializeWithPlaceSizeForTest(backing[1:], 1, ser)
+	require.Equal(t, hmErrorSmallPlaceForTest(), hmErr)
+}
+
 func TestLarge(t *testing.T) {
 	r := rand.New(rand.NewSource(200))
 

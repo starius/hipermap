@@ -109,3 +109,18 @@ func TestCacheControl(t *testing.T) {
 		}
 	}
 }
+
+func TestInitRejectsTooSmallDeclaredSizeOnMisalignedPlace(t *testing.T) {
+	const capacity = 16
+	const speed = 3
+
+	need, hmErr := cachePlaceSizeForTest(capacity, speed)
+	require.Equal(t, 0, hmErr)
+	require.Greater(t, need, 0)
+
+	backing := make([]byte, need+64)
+	// Use intentionally misaligned pointer but large backing storage.
+	// Declared size is tiny and must be rejected.
+	errCode := cacheInitWithPlaceSizeForTest(backing[1:], 1, capacity, speed)
+	require.Equal(t, hmErrorSmallPlaceForTest(), errCode)
+}

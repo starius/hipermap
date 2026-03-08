@@ -313,7 +313,11 @@ hm_error_t HM_CDECL hm_cache_init(char* cache_place, size_t cache_place_size,
   // Align db_place forward, if needed.
   {
     char* cache_place2 = align8(cache_place);
-    cache_place_size -= (cache_place2 - cache_place);
+    size_t delta = (size_t)((uintptr_t)cache_place2 - (uintptr_t)cache_place);
+    if (delta > cache_place_size) {
+      return HM_ERROR_SMALL_PLACE;
+    }
+    cache_place_size -= delta;
     cache_place = cache_place2;
   }
 

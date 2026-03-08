@@ -95,3 +95,29 @@ func (c *Cache) Dump() []uint32 {
 	)
 	return ips[:ipsLen]
 }
+
+func cachePlaceSizeForTest(capacity, speed int) (size int, hmErr int) {
+	var cachePlaceSize C.size_t
+	errCode := C.hm_cache_place_size(
+		&cachePlaceSize,
+		C.uint(capacity),
+		C.int(speed),
+	)
+	return int(cachePlaceSize), int(errCode)
+}
+
+func cacheInitWithPlaceSizeForTest(cachePlace []byte, declaredSize int, capacity, speed int) int {
+	var cache *C.hm_cache_t
+	errCode := C.hm_cache_init(
+		(*C.char)(unsafe.Pointer(&cachePlace[0])),
+		C.size_t(declaredSize),
+		&cache,
+		C.uint(capacity),
+		C.int(speed),
+	)
+	return int(errCode)
+}
+
+func hmErrorSmallPlaceForTest() int {
+	return int(C.HM_ERROR_SMALL_PLACE)
+}
