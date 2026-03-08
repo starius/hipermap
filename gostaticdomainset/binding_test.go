@@ -263,6 +263,32 @@ func TestDomainSet_SerializeRoundtrip(t *testing.T) {
 	require.False(t, ok)
 }
 
+// TestDomainSet_SerializeDeterministicAcrossCompiles ensures that compiling the
+// same input domains multiple times yields byte-identical serialized databases.
+func TestDomainSet_SerializeDeterministicAcrossCompiles(t *testing.T) {
+	domains := []string{
+		"example.com",
+		"alpha.example.com",
+		"beta.example.com",
+		"gamma.example.com",
+	}
+	for i := 0; i < 40; i++ {
+		domains = append(domains, fmt.Sprintf("x%d.popular.example.net", i))
+	}
+
+	ds1, err := Compile(domains)
+	require.NoError(t, err)
+	ser1, err := ds1.Serialize()
+	require.NoError(t, err)
+
+	ds2, err := Compile(domains)
+	require.NoError(t, err)
+	ser2, err := ds2.Serialize()
+	require.NoError(t, err)
+
+	require.Equal(t, ser1, ser2)
+}
+
 func TestDomainSet_NoIntermediateSuffixes(t *testing.T) {
 	domains := []string{
 		"a.b.c.d.e",
