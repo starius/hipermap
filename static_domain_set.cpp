@@ -700,8 +700,12 @@ hm_domain_blob_bytes(const hm_domain_database_t* db) {
   return db->domains_blob_size;
 }
 
-// Serialized form is the same as db_place starting from db header and
-// up to the end of domains_blob. Prefixed with the magic 4 bytes.
+// Serialized form is:
+// [4-byte magic] [64-byte canonical header] [popular records] [bucket records]
+// [domains blob].
+//
+// Pointer fields in header/records are not persisted and are written as zeroes
+// to keep the format deterministic across runs and process layouts.
 
 extern "C" size_t HM_CDECL
 hm_domain_serialized_size(const hm_domain_database_t* db) {
@@ -731,13 +735,50 @@ extern "C" hm_error_t HM_CDECL hm_domain_serialize(
     return HM_ERROR_SMALL_PLACE;
   }
 
-  uint32_t* magic = (uint32_t*)buffer;
-  *magic = STATIC_DOMAIN_SET_MAGIC;
+  const size_t hdr_bytes = round_up64(sizeof(hm_domain_database_t));
+  const size_t popular_bytes =
+      (size_t)db->popular_records * sizeof(domains_table_record_t);
+  const size_t table_bytes =
+      (size_t)db->buckets * sizeof(domains_table_record_t);
+  const size_t payload_bytes =
+      hdr_bytes + popular_bytes + table_bytes + db->domains_blob_size;
+  if (need != 4 + payload_bytes) {
+    return HM_ERROR_BAD_VALUE;
+  }
 
-  buffer += sizeof(uint32_t);
-  // Copy the serialized payload excluding the 4-byte magic header we already
-  // wrote.
-  memcpy(buffer, db, need - sizeof(uint32_t));
+  uint32_t magic = STATIC_DOMAIN_SET_MAGIC;
+  memcpy(buffer, &magic, sizeof(magic));
+  buffer += sizeof(magic);
+
+  // Write canonical header (pointer fields left zero).
+  hm_domain_database_t hdr = {};
+  hdr.fastmod_M = db->fastmod_M;
+  hdr.buckets = db->buckets;
+  hdr.hash_seed = db->hash_seed;
+  hdr.popular_records = db->popular_records;
+  hdr.popular_count = db->popular_count;
+  hdr.domains_blob_size = db->domains_blob_size;
+  memset(buffer, 0, hdr_bytes);
+  memcpy(buffer, &hdr, sizeof(hdr));
+  buffer += hdr_bytes;
+
+  // Write popular table records with pointer field canonicalized to zero.
+  for (uint32_t i = 0; i < db->popular_records; i++) {
+    domains_table_record_t rec = db->popular_table[i];
+    rec.domains_blob = nullptr;
+    memcpy(buffer, &rec, sizeof(rec));
+    buffer += sizeof(rec);
+  }
+
+  // Write main table records with pointer field canonicalized to zero.
+  for (uint32_t i = 0; i < db->buckets; i++) {
+    domains_table_record_t rec = db->domains_table[i];
+    rec.domains_blob = nullptr;
+    memcpy(buffer, &rec, sizeof(rec));
+    buffer += sizeof(rec);
+  }
+
+  memcpy(buffer, db->domains_blob, db->domains_blob_size);
 
   return HM_SUCCESS;
 }
